@@ -1,0 +1,8 @@
+# Files blocked
+/data/datasets
+
+__pycache__/
+*.py[cod]
+
+# Model Files
+*.pth
