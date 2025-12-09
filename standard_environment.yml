@@ -1,0 +1,8 @@
+# Create environment bash command: conda env create --name scratch --file standard_environment.yml
+name: scratch
+channels:
+  - defaults
+dependencies:
+  - python=3.9.25
+  - numpy=2.0.2
+  - matplotlib
