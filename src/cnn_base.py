@@ -18,8 +18,9 @@ class Convolution():
         self.stride = stride
         self.padding = kernel_size // 2
         self.weights = self.set_weights()
-        #print('shape_r: ', self.weights.shape)
-        self.bias = 0.1
+        self.bias = 0.02
+        #print('W: ', self.weights.shape)
+        #print(self.weights)
 
 
     def set_weights(self) -> np.ndarray :
@@ -27,29 +28,28 @@ class Convolution():
         fan_out = self.on_channels  * self.kernel_size * self.kernel_size # Out-channels, kernel_h, kernel_w
         #print(fan_in, fan_out)
         limit   = (-np.sqrt(6.0 / (fan_in + fan_out)), np.sqrt(6.0 / (fan_in + fan_out)))
-        return  rng.uniform(*limit, size=(self.n_dataset, self.on_channels, self.kernel_size, self.kernel_size))
+        return  rng.uniform(*limit, size=(self.on_channels, self.in_channels, self.kernel_size, self.kernel_size)) #(2, 1, 5, 5)
+
 
 
     def forward(self, data) -> np.ndarray:
         # Remaps variables to remove self class dictionary calls.
         f = self.activation
         k_s = self.kernel_size
+        i_n = self.in_channels - 1 # Static needs to be fixed
         st  = self.stride
         pd  = self.padding
         b   = self.bias
 
         dm  = (self.d_inputs - (self.padding * 2)) // self.stride  # How many times kernel will move across a dimension
         out_conv = np.zeros((len(data), self.on_channels, self.d_inputs//st, self.d_inputs//st)) # (Number of image, output in layer, H data, W data)
-        #print('OUTPUT: ', out_conv.shape)
-        #print("shape: ", out.shape)
-        print('Data: ', data.shape) # TODO: Get forward to work with second layer for more than one input
-        for d_i, datum in enumerate(data): # Separates single data image to be passed through layer of neurons
-            print(datum.shape)
-            for k_i, k in enumerate(self.weights[d_i]): # Singles out weight/kernels for each neuron
+
+        for k_i, k in enumerate(self.weights): # Singles out weight/kernels for each neuron
+            for d_i, datum in enumerate(data): # Separates single data image to be passed through layer of neurons
                 for r in range(pd, dm*st, st): # Singles out image row with consideration to stride length
                     for c in range(pd, dm*st, st): # Singles out column with consideration to stride
-                        #print(datum[r:r+k_s, c:c+k_s])
-                        product = (np.sum(datum[r:r+k_s, c:c+k_s] * k) + b) / k_s**2 # Pixel calculation
+
+                        product = (np.sum(datum[k_i//2, r:r+k_s, c:c+k_s] * k[k_i//2])) + b / k_s**2 # Pixel calculation
 
                         # Non-linear activation function per pixel; (pd//st+c//st) centers outputs
                         out_conv[d_i, k_i, r//st + pd//st, c//st + pd//st] = f(product)
@@ -67,6 +67,7 @@ class Pooling():
             for k in range(len(out_conv[0])): # Runs though every kernel for neuron layer
                 for r_i, r in enumerate(range(0, o_d, d)):
                     for c_i, c in enumerate(range(0, o_d, d)):
+
                         window = data[k, r:r+d, c:c+d] # Get window to downsample
                         out[d_i, k, r_i, c_i] = np.max(window) # Places downsampled pixel in new downsampled array
         return out
@@ -82,14 +83,18 @@ if __name__ == "__main__":
 
     folder = Path("../data/test_data_256x256")
     paths = sorted(folder.glob("*.png"))
-    dataset = np.stack([np.array(Image.open(p).convert("L"), dtype=np.float32) / 255.0 for p in paths]) # Converts images to grayscale dataset
-    input_dimension = len(dataset[0])
+    # Converts images to grayscale dataset (n images, 1, 256, 256)
+    dataset = np.stack([[np.array(Image.open(p).convert("L"), dtype=np.float32) / 255.0] for p in paths])
+    input_dimension = len(dataset[0,0])
+    dataset_number = len(dataset)
     pool = Pooling()
 
+    print(dataset.shape)
+    # Training Layers
     # Layer 0
     net_0 = Convolution(
         activation=gelu,
-        number_dataset=len(dataset),
+        number_dataset=dataset_number,
         input_channels=1,
         output_channels=2,
         dimension=input_dimension,
@@ -97,44 +102,109 @@ if __name__ == "__main__":
         stride=1
     )
     out_conv_0 = net_0.forward(dataset)
-    #print('PNEW :', dataset.shape)
     out_0 = pool.forward(out_conv_0)
-    #print('EW :', out_0.shape)
-    print('OO: ', len(out_0[0,0]))
-    '''
+    print(out_0.shape)
+
     # Layer 1
     net_1 = Convolution(
         activation=gelu,
-        number_dataset = 5,
-        input_channels = 2,
-        output_channels = 4,
-        dimension = 128,
+        number_dataset = dataset_number,
+        input_channels = net_0.on_channels,
+        output_channels = int(net_0.on_channels * 2),
+        dimension = len(out_0[0,0]),
         kernel_size=5,
         stride=1
     )
-    out_1 = net_1.forward(out_0)
-    #print('A NEW :', out_conv_1.shape)
-    #out_1 = pool.forward(out_conv_1)
-    print('NEW :', out_1.shape)
-    '''
+    out_conv_1 = net_1.forward(out_0)
+    out_1 = pool.forward(out_conv_1)
+    print(out_1.shape)
+
+    # Layer 2
+    net_2 = Convolution(
+        activation=gelu,
+        number_dataset = dataset_number,
+        input_channels = net_1.on_channels,
+        output_channels = int(net_1.on_channels * 2),
+        dimension = len(out_1[0,0]),
+        kernel_size=5,
+        stride=1
+    )
+    out_conv_2 = net_2.forward(out_1)
+    out_2 = pool.forward(out_conv_2)
+    print(out_2.shape)
+
+    # Layer 3
+    net_3 = Convolution(
+        activation=gelu,
+        number_dataset = dataset_number,
+        input_channels = net_2.on_channels,
+        output_channels = int(net_2.on_channels * 2),
+        dimension = len(out_2[0,0]),
+        kernel_size=5,
+        stride=1
+    )
+    out_conv_3 = net_3.forward(out_2)
+    out_3 = pool.forward(out_conv_3)
+    print(out_3.shape)
+
+    # Layer 4
+    net_4 = Convolution(
+        activation=gelu,
+        number_dataset = dataset_number,
+        input_channels = net_3.on_channels,
+        output_channels = int(net_3.on_channels * 2),
+        dimension = len(out_3[0,0]),
+        kernel_size=5,
+        stride=1
+    )
+    out_conv_4 = net_4.forward(out_3)
+    out_4 = pool.forward(out_conv_4)
+
+    print(out_4.shape)
+    n, c, h, w = out_4.shape
+    flatten = out_4.reshape(n, c*h*w)
+    print(flatten.shape)
 
 
 
-    #print('OUTPUT: ', out_conv.shape)
-    #out = pool.forward(out_conv)
-    #print(f'Out Dim: {out.shape}')
+    # ///////////////////////////////////////////////////////////////////////////////////////////////////
+    layer = 5
+    d_n = dataset_number
 
     # Graph information
-    fig, axes = plt.subplots(len(out_0), len(out_0[0])+1, figsize=(12, 8), constrained_layout=True)
-    #print('NEW SHAPE: ', axes.shape)
+    fig, axes = plt.subplots(len(out_0)*layer, len(out_0[0])+1, figsize=(6, 20), constrained_layout=True)
 
-    for r in range(len(axes)):
-        axes[r,0].imshow(dataset[r], cmap='gray') # Maps original dataset to first row
-        axes[r,0].axis('off')
-        for c in range(len(axes[0])-1):
-            axes[r,c+1].imshow(out_0[r,c], cmap='gray') # Maps kernel outputs to successive rows
-            axes[r,c+1].axis('off')
+    for n in range(layer):
+        #axes[n*layer, 0].set_ylabel(f"Layer {n}", size=12)
+        for r in range(len(axes)//layer):
+            axes[r,0].imshow(dataset[r,0], cmap='gray') # Maps original dataset to first row
+            axes[r,0].axis('off')
 
-    #axes[:,:].axis("off")
+            if n == 0:
+                for c in range(len(axes[0])-1):
+                    axes[r,c+1].imshow(out_0[r,c], cmap='gray') # Maps kernel outputs to successive rows
+                    axes[r,c+1].axis('off')
+
+            if n == 1:
+                for c in range(len(axes[0])):
+                    axes[r+d_n,c].imshow(out_1[r,c], cmap='gray') # Maps kernel outputs to successive rows
+                    axes[r+d_n,c].axis('off')
+
+            if n == 2:
+                for c in range(len(axes[0])):
+                    axes[d_n*n+r,c].imshow(out_2[r,c], cmap='gray') # Maps kernel outputs to successive rows
+                    axes[d_n*n+r,c].axis('off')
+
+            if n == 3:
+                for c in range(len(axes[0])):
+                    axes[d_n*n+r,c].imshow(out_3[r,c], cmap='gray') # Maps kernel outputs to successive rows
+                    axes[d_n*n+r,c].axis('off')
+
+            if n == 4:
+                for c in range(len(axes[0])):
+                    axes[d_n*n+r,c].imshow(out_4[r,c], cmap='gray') # Maps kernel outputs to successive rows
+                    axes[d_n*n+r,c].axis('off')
+
+
     plt.show()
 
