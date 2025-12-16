@@ -1,14 +1,55 @@
+"""
+Minimal NumPy CNN with a runnable test pipeline.
+
+The module includes a convolution layer, a pooling layer, and an optional
+Cython-backed pooling path for faster downsampling.
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
+import time
 from typing import Callable
 from pathlib import Path
 from PIL import Image
+
+
+try:
+    import fast_ops
+    HAS_FAST_OPS = True
+except ImportError:
+    HAS_FAST_OPS = False
 
 rng = np.random.default_rng()
 function = Callable[[float], float]
 
 class Convolution():
+    """
+    Single convolution layer with square kernels, fixed padding, and stride.
+
+    Stores weights, bias, and activation to produce feature maps from an input
+    batch.
+    """
     def __init__(self, activation:function, number_dataset:int, input_channels:int=1, output_channels:int=3, dimension:int=256, kernel_size:int=5, stride:int=1):
+        """
+        Initialize convolution parameters and weights.
+
+        Parameters
+        ----------
+        activation : Callable[[float], float]
+            Non-linear activation applied per output pixel.
+        number_dataset : int
+            Dataset size; kept for potential future batching logic.
+        input_channels : int, default=1
+            Number of channels in the input tensor.
+        output_channels : int, default=3
+            Number of convolution kernels / output channels.
+        dimension : int, default=256
+            Height/width of the square input.
+        kernel_size : int, default=5
+            Size of the square kernel (odd values recommended).
+        stride : int, default=1
+            Convolution stride.
+        """
         self.activation = activation
         self.n_dataset = number_dataset
         self.in_channels = input_channels
@@ -19,11 +60,17 @@ class Convolution():
         self.padding = kernel_size // 2
         self.weights = self.set_weights()
         self.bias = 0.02
-        #print('W: ', self.weights.shape)
-        #print(self.weights)
 
 
     def set_weights(self) -> np.ndarray :
+        """
+        Creates Xavier-scaled weights for the convolution kernels.
+
+        Returns
+        -------
+        np.ndarray
+            Tensor shaped (out_channels, in_channels, kernel_h, kernel_w).
+        """
         fan_in  = self.in_channels * self.kernel_size * self.kernel_size # In-channels, kernel_h,
         fan_out = self.on_channels  * self.kernel_size * self.kernel_size # Out-channels, kernel_h, kernel_w
         #print(fan_in, fan_out)
@@ -33,6 +80,19 @@ class Convolution():
 
 
     def forward(self, data) -> np.ndarray:
+        """
+        Compute the convolution output for a batch and apply activation.
+
+        Parameters
+        ----------
+        data : np.ndarray
+            Input shaped (batch, channels, height, width).
+
+        Returns
+        -------
+        np.ndarray
+            Activated feature maps shaped (batch, out_channels, out_h, out_w).
+        """
         # Remaps variables to remove self class dictionary calls.
         f = self.activation
         k_s = self.kernel_size
@@ -42,7 +102,7 @@ class Convolution():
         b   = self.bias
 
         dm  = (self.d_inputs - (self.padding * 2)) // self.stride  # How many times kernel will move across a dimension
-        out_conv = np.zeros((len(data), self.on_channels, self.d_inputs//st, self.d_inputs//st)) # (Number of image, output in layer, H data, W data)
+        out_conv = np.empty((len(data), self.on_channels, self.d_inputs//st, self.d_inputs//st)) # (Number of image, output in layer, H data, W data)
 
         for k_i, k in enumerate(self.weights): # Singles out weight/kernels for each neuron
             for d_i, datum in enumerate(data): # Separates single data image to be passed through layer of neurons
@@ -57,14 +117,34 @@ class Convolution():
 
 
 class Pooling():
+    """Max-pooling layer with an optional Cython acceleration path."""
     def forward(self, out_conv:np.ndarray, reduction:int=2) -> np.ndarray:
-        o_d = len(out_conv[0,0]) # HxW of the pool inputs (convolution outputs)
+        """
+        Downsample feature maps with max-pooling.
+
+        Parameters
+        ----------
+        out_conv : np.ndarray
+            Activations shaped (batch, channels, height, width).
+        reduction : int, default=2
+            Pooling window size and stride.
+
+        Returns
+        -------
+        np.ndarray
+            Pooled tensor shaped (batch, channels, height/reduction, width/reduction).
+        """
+        pooled_input = np.ascontiguousarray(out_conv, dtype=np.float32)
+
+        if HAS_FAST_OPS: return fast_ops.max_pool4d(pooled_input, reduction)
+
+        o_d = len(pooled_input[0,0]) # HxW of the pool inputs (convolution outputs)
         d = reduction # Downsample amount
         m = o_d//d # Filter movement length
-        out = np.zeros((len(out_conv), len(out_conv[0]), m, m))
+        out = np.zeros((len(pooled_input), len(pooled_input[0]), m, m), dtype=pooled_input.dtype)
 
-        for d_i, data in enumerate(out_conv): # Separates single data image for entire layer
-            for k in range(len(out_conv[0])): # Runs though every kernel for neuron layer
+        for d_i, data in enumerate(pooled_input): # Separates single data image for entire layer
+            for k in range(len(pooled_input[0])): # Runs though every kernel for neuron layer
                 for r_i, r in enumerate(range(0, o_d, d)):
                     for c_i, c in enumerate(range(0, o_d, d)):
 
@@ -88,8 +168,11 @@ if __name__ == "__main__":
     input_dimension = len(dataset[0,0])
     dataset_number = len(dataset)
     pool = Pooling()
+    HAS_FAST_OPS = False
+    print("Cython:", HAS_FAST_OPS)
 
-    print(dataset.shape)
+    begin_time = time.perf_counter()
+
     # Training Layers
     # Layer 0
     net_0 = Convolution(
@@ -104,6 +187,9 @@ if __name__ == "__main__":
     out_conv_0 = net_0.forward(dataset)
     out_0 = pool.forward(out_conv_0)
     print(out_0.shape)
+    elapsed = time.perf_counter() - begin_time
+    print(f'L0 Elapsed: {elapsed:.3f}\n')
+    elapsed = time.perf_counter()
 
     # Layer 1
     net_1 = Convolution(
@@ -118,6 +204,9 @@ if __name__ == "__main__":
     out_conv_1 = net_1.forward(out_0)
     out_1 = pool.forward(out_conv_1)
     print(out_1.shape)
+    elapsed = time.perf_counter() - elapsed
+    print(f'L1 Elapsed: {elapsed:.3f}\n')
+    elapsed = time.perf_counter()
 
     # Layer 2
     net_2 = Convolution(
@@ -132,6 +221,9 @@ if __name__ == "__main__":
     out_conv_2 = net_2.forward(out_1)
     out_2 = pool.forward(out_conv_2)
     print(out_2.shape)
+    elapsed = time.perf_counter() - elapsed
+    print(f'L2 Elapsed: {elapsed:.3f}\n')
+    elapsed = time.perf_counter()
 
     # Layer 3
     net_3 = Convolution(
@@ -146,6 +238,9 @@ if __name__ == "__main__":
     out_conv_3 = net_3.forward(out_2)
     out_3 = pool.forward(out_conv_3)
     print(out_3.shape)
+    elapsed = time.perf_counter() - elapsed
+    print(f'L3 Elapsed: {elapsed:.3f}\n')
+    elapsed = time.perf_counter()
 
     # Layer 4
     net_4 = Convolution(
@@ -159,13 +254,16 @@ if __name__ == "__main__":
     )
     out_conv_4 = net_4.forward(out_3)
     out_4 = pool.forward(out_conv_4)
-
     print(out_4.shape)
+    elapsed = time.perf_counter() - elapsed
+    print(f'L4 Elapsed: {elapsed:.6f}\n')
+
     n, c, h, w = out_4.shape
-    flatten = out_4.reshape(n, c*h*w)
+    flatten = out_4.reshape(n, c * h * w) # Flatten final output into a single vector
     print(flatten.shape)
 
-
+    #end = time.perf_counter()
+    print(f'Total Time: {(time.perf_counter() - begin_time):.3f}')
 
     # ///////////////////////////////////////////////////////////////////////////////////////////////////
     layer = 5
@@ -207,4 +305,3 @@ if __name__ == "__main__":
 
 
     plt.show()
-

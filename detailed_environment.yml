@@ -4,6 +4,7 @@ channels:
 dependencies:
   - python==3.9.25=h0dcde21_1
   - numpy==2.0.2=py39h64c44e4_2
+  - cython==3.0.11
   - matplotlib
   - xorg-libxdmcp==1.1.5=h9b100fa_0
   - intel-openmp==2025.0.0=h06a4308_1171

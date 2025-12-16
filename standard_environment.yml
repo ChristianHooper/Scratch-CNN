@@ -6,3 +6,4 @@ dependencies:
   - python=3.9.25
   - numpy=2.0.2
   - matplotlib
+  - cython
