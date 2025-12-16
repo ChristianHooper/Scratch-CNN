@@ -6,3 +6,16 @@ __pycache__/
 
 # Model Files
 *.pth
+
+AGENTS.md
+
+# Cython / compiled extensions
+*.so
+*.pyd
+*.dll
+*.dylib
+
+# build metadata
+*.egg-info/
+build/
+dist/
