@@ -104,12 +104,14 @@ class Convolution():
         dm  = (self.d_inputs - (self.padding * 2)) // self.stride  # How many times kernel will move across a dimension
         out_conv = np.empty((len(data), self.on_channels, self.d_inputs//st, self.d_inputs//st)) # (Number of image, output in layer, H data, W data)
 
+        #print('DATA: ', data.shape)
+        #print('WEIGHT: ', self.weights.shape)
         for k_i, k in enumerate(self.weights): # Singles out weight/kernels for each neuron
             for d_i, datum in enumerate(data): # Separates single data image to be passed through layer of neurons
                 for r in range(pd, dm*st, st): # Singles out image row with consideration to stride length
                     for c in range(pd, dm*st, st): # Singles out column with consideration to stride
 
-                        product = (np.sum(datum[k_i//2, r:r+k_s, c:c+k_s] * k[k_i//2])) + b / k_s**2 # Pixel calculation
+                        product = (np.sum(datum[k_i//2, r:r+k_s, c:c+k_s] * k[k_i//2])) + b / k_s**2 # Per pixel summation and normalization
 
                         # Non-linear activation function per pixel; (pd//st+c//st) centers outputs
                         out_conv[d_i, k_i, r//st + pd//st, c//st + pd//st] = f(product)
@@ -168,7 +170,7 @@ if __name__ == "__main__":
     input_dimension = len(dataset[0,0])
     dataset_number = len(dataset)
     pool = Pooling()
-    HAS_FAST_OPS = False
+    #HAS_FAST_OPS = False
     print("Cython:", HAS_FAST_OPS)
 
     begin_time = time.perf_counter()
@@ -186,7 +188,7 @@ if __name__ == "__main__":
     )
     out_conv_0 = net_0.forward(dataset)
     out_0 = pool.forward(out_conv_0)
-    print(out_0.shape)
+    #print(out_0.shape)
     elapsed = time.perf_counter() - begin_time
     print(f'L0 Elapsed: {elapsed:.3f}\n')
     elapsed = time.perf_counter()
@@ -203,7 +205,7 @@ if __name__ == "__main__":
     )
     out_conv_1 = net_1.forward(out_0)
     out_1 = pool.forward(out_conv_1)
-    print(out_1.shape)
+    #print(out_1.shape)
     elapsed = time.perf_counter() - elapsed
     print(f'L1 Elapsed: {elapsed:.3f}\n')
     elapsed = time.perf_counter()
@@ -220,7 +222,7 @@ if __name__ == "__main__":
     )
     out_conv_2 = net_2.forward(out_1)
     out_2 = pool.forward(out_conv_2)
-    print(out_2.shape)
+    #print(out_2.shape)
     elapsed = time.perf_counter() - elapsed
     print(f'L2 Elapsed: {elapsed:.3f}\n')
     elapsed = time.perf_counter()
@@ -237,7 +239,7 @@ if __name__ == "__main__":
     )
     out_conv_3 = net_3.forward(out_2)
     out_3 = pool.forward(out_conv_3)
-    print(out_3.shape)
+    #print(out_3.shape)
     elapsed = time.perf_counter() - elapsed
     print(f'L3 Elapsed: {elapsed:.3f}\n')
     elapsed = time.perf_counter()
@@ -254,13 +256,40 @@ if __name__ == "__main__":
     )
     out_conv_4 = net_4.forward(out_3)
     out_4 = pool.forward(out_conv_4)
-    print(out_4.shape)
+    #print(out_4.shape)
     elapsed = time.perf_counter() - elapsed
     print(f'L4 Elapsed: {elapsed:.6f}\n')
 
+
+    # Classifier Head (Uses flattened feature vector and computes k evidence scores)
+    k = 2 # Number of classes
+    b = np.zeros((k)) # Bias
     n, c, h, w = out_4.shape
+    # This vector is the encoded version of the network for feature detection through probabilistic assignment, meaning parts of the vector classify for certain features
     flatten = out_4.reshape(n, c * h * w) # Flatten final output into a single vector
-    print(flatten.shape)
+    w = np.random.randn(k, len(flatten[1])) * 0.01
+
+    # Class votes through weighted sum of all features; largest logits is the winning class
+    logits = flatten @ w.T + b # [i, j] (image, class) image i from class j (5, 2)
+
+
+
+    # Softmax
+    logits_shift = logits - logits.max() # Shifts logit to avoid expo map issues
+    probs = np.exp(logits_shift)
+    probs /= probs.sum(axis=1, keepdims=True)
+
+    print('FSHAPE: ', flatten.shape)
+    print('WSHAPE: ', w.T.shape)
+    print('LSHAPE: ', logits.shape)
+    print('LOGITS: ', logits)
+    print('SHIFT:  ', logits_shift)
+    print('PROBS:  ', probs)
+
+
+
+
+
 
     #end = time.perf_counter()
     print(f'Total Time: {(time.perf_counter() - begin_time):.3f}')
