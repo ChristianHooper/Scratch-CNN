@@ -261,34 +261,60 @@ if __name__ == "__main__":
     print(f'L4 Elapsed: {elapsed:.6f}\n')
 
 
+
     # Classifier Head (Uses flattened feature vector and computes k evidence scores)
     k = 2 # Number of classes
     b = np.zeros((k)) # Bias
     n, c, h, w = out_4.shape
+    lr = 0.1 # Learning rate
+
     # This vector is the encoded version of the network for feature detection through probabilistic assignment, meaning parts of the vector classify for certain features
-    flatten = out_4.reshape(n, c * h * w) # Flatten final output into a single vector
-    w = np.random.randn(k, len(flatten[1])) * 0.01
+    #flatten = out_4.reshape(n, c * h * w) # Flatten final output into a single vector
+    #wt = np.random.randn(k, len(flatten[1])) * 0.01 # Weights
+    flatten = out_4.mean(axis=(2,3))   # (n, c)  global avg pool
+    wt = np.random.randn(k, c) * 0.01
 
-    # Class votes through weighted sum of all features; largest logits is the winning class
-    logits = flatten @ w.T + b # [i, j] (image, class) image i from class j (5, 2)
+    y = np.array([0, 0, 1, 0, 0]) # Truth classifications; Class 1 is Aiko all others class 0
+
+    for step in range(1000):
+
+        # Class votes through weighted sum of all features; largest logits is the winning class
+        logits = flatten @ wt.T + b # [i, j] (image, class) image i from class j (5, 2)
+
+        # Softmax
+        logits_shift = logits - logits.max(axis=1, keepdims=True) # Shifts logit to avoid expo map issues
+        probs = np.exp(logits_shift)
+        probs /= probs.sum(axis=1, keepdims=True) # Per row
+
+        # Loss
+        #predict = np.argmax(probs, axis=1) # Inference
+        loss = -np.mean(np.log(probs[np.arange(n), y] + 1e-12)) # Small float; never log 0
+
+        if step % 100 == 0:
+            pred = np.argmax(probs, axis=1)
+            acc = (pred == y).mean()
+            print(step, loss, acc)
+
+        # Backward
+        dlogits = probs.copy()
+        dlogits[np.arange(n), y] -= 1
+        dlogits /= n
+
+        dW = dlogits.T @ flatten
+        db = dlogits.sum(axis=0)
+
+        # Update
+        wt -= lr * dW # Weights
+        b -= lr * db # Bias
 
 
-
-    # Softmax
-    logits_shift = logits - logits.max() # Shifts logit to avoid expo map issues
-    probs = np.exp(logits_shift)
-    probs /= probs.sum(axis=1, keepdims=True)
-
-    print('FSHAPE: ', flatten.shape)
-    print('WSHAPE: ', w.T.shape)
-    print('LSHAPE: ', logits.shape)
-    print('LOGITS: ', logits)
-    print('SHIFT:  ', logits_shift)
+    #print('FSHAPE: ', flatten.shape)
+    #print('WSHAPE: ', w.T.shape)
+    #print('LSHAPE: ', logits.shape)
+    #print('LOGITS: ', logits)
+    #print('SHIFT:  ', logits_shift)
+    print('SHAPES: ', probs.shape)
     print('PROBS:  ', probs)
-
-
-
-
 
 
     #end = time.perf_counter()
