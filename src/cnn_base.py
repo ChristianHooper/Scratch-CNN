@@ -111,7 +111,7 @@ class Convolution():
                 for r in range(pd, dm*st, st): # Singles out image row with consideration to stride length
                     for c in range(pd, dm*st, st): # Singles out column with consideration to stride
 
-                        product = (np.sum(datum[k_i//2, r:r+k_s, c:c+k_s] * k[k_i//2])) + b / k_s**2 # Per pixel summation and normalization
+                        product = (np.sum(datum[k_i//2, r:r+k_s, c:c+k_s] * k[k_i//2])) + b # Per pixel normalization can be added at end of formula (product / k_s**2)
 
                         # Non-linear activation function per pixel; (pd//st+c//st) centers outputs
                         out_conv[d_i, k_i, r//st + pd//st, c//st + pd//st] = f(product)
@@ -271,8 +271,10 @@ if __name__ == "__main__":
     # This vector is the encoded version of the network for feature detection through probabilistic assignment, meaning parts of the vector classify for certain features
     #flatten = out_4.reshape(n, c * h * w) # Flatten final output into a single vector
     #wt = np.random.randn(k, len(flatten[1])) * 0.01 # Weights
-    flatten = out_4.mean(axis=(2,3))   # (n, c)  global avg pool
+    flatten = out_4.mean(axis=(2,3))   # (n, c)  global avg pool $F\in{\mathbb{R}^{(N,C,H,W)}}\to{G\in{\mathbb{R}^{(N,C)}}}$
     wt = np.random.randn(k, c) * 0.01
+    print('OUT: ', out_4.shape)
+    print('GAP: ', flatten.shape)
 
     y = np.array([0, 0, 1, 0, 0]) # Truth classifications; Class 1 is Aiko all others class 0
 
@@ -293,7 +295,7 @@ if __name__ == "__main__":
         if step % 100 == 0:
             pred = np.argmax(probs, axis=1)
             acc = (pred == y).mean()
-            print(step, loss, acc)
+            print(f'Step:{step} | Loss:{loss} | accuracy:{acc} | Prediction:{pred}')
 
         # Backward
         dlogits = probs.copy()
