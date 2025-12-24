@@ -75,7 +75,7 @@ class Convolution():
         fan_out = self.on_channels  * self.kernel_size * self.kernel_size # Out-channels, kernel_h, kernel_w
         #print(fan_in, fan_out)
         limit   = (-np.sqrt(6.0 / (fan_in + fan_out)), np.sqrt(6.0 / (fan_in + fan_out)))
-        return  rng.uniform(*limit, size=(self.on_channels, self.in_channels, self.kernel_size, self.kernel_size)) #(2, 1, 5, 5)
+        return  rng.uniform(*limit, size=(self.on_channels, self.kernel_size, self.kernel_size)) #(2, 1, 5, 5)
 
 
 
@@ -98,25 +98,51 @@ class Convolution():
         k_s = self.kernel_size
         i_n = self.in_channels - 1 # Static needs to be fixed
         st  = self.stride
-        pd  = self.padding
+        pd  = self.padding # $frac{d+2p-k}{s}$
+        n = self.d_inputs
+        #print(f'({self.d_inputs} + ({2}*{pd}) - {k_s})/{st}')
+        #print("PADDING: ", (self.d_inputs + (2*pd) - k_s)/st)
         b   = self.bias
+        out_conv = np.empty((len(data), self.on_channels, self.d_inputs//st, self.d_inputs//st)) # (Number of image, output in layer, H data, W data)
+        print('dataS :', data.shape)
+        print('weightS :', self.weights.shape)
+        print('outS: ', out_conv.shape, "\n")
 
+        for i, image in enumerate(data):
+            for datum in image:
+                x = np.pad(datum, ((pd, pd,), (pd, pd)), mode='edge') # Pads input image (wrap, edge, constant(default))
+                for d, w in enumerate(self.weights):
+                    for r in range(0, n, st):
+                        for c in range(0, n, st):
+                            product = np.sum(w * x[r:r+k_s, c:c+k_s] + b)
+                            #product = np.sum(w.T @ x[r:r+k_s, c:c+k_s])+b TODO: Proper equivalence
+                            out_conv[i, d, r, c] = f(product)
+        return out_conv
+
+
+        '''
         dm  = (self.d_inputs - (self.padding * 2)) // self.stride  # How many times kernel will move across a dimension
         out_conv = np.empty((len(data), self.on_channels, self.d_inputs//st, self.d_inputs//st)) # (Number of image, output in layer, H data, W data)
 
         #print('DATA: ', data.shape)
-        #print('WEIGHT: ', self.weights.shape)
-        for k_i, k in enumerate(self.weights): # Singles out weight/kernels for each neuron
+        print('WEIGHT: ', self.weights.shape)
+        for k_i, k in enumerate(self.weights): # Singles out weight/kernels for set of neurons
             for d_i, datum in enumerate(data): # Separates single data image to be passed through layer of neurons
+                print('datum: ', datum.shape)
+                print('weight: ', k_i, '\n')
+                #np.pad(datum[k_i//2], ((pd, pd), (pd, pd)))
+                #print(f'LEN: {self.d_inputs} | PAD: {len(datum[k_i//2])}')
+                #print(datum[k_i//2])
                 for r in range(pd, dm*st, st): # Singles out image row with consideration to stride length
                     for c in range(pd, dm*st, st): # Singles out column with consideration to stride
 
-                        product = (np.sum(datum[k_i//2, r:r+k_s, c:c+k_s] * k[k_i//2])) + b # Per pixel normalization can be added at end of formula (product / k_s**2)
+                        product = (np.sum(datum[0, r:r+k_s, c:c+k_s] * k[k_i])) + b # Per pixel normalization can be added at end of formula (product / k_s**2)
 
                         # Non-linear activation function per pixel; (pd//st+c//st) centers outputs
                         out_conv[d_i, k_i, r//st + pd//st, c//st + pd//st] = f(product)
+        print('\n')
         return out_conv
-
+        '''
 
 class Pooling():
     """Max-pooling layer with an optional Cython acceleration path."""
