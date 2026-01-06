@@ -77,7 +77,6 @@ class Convolution():
         return  rng.uniform(*limit, size=(self.on_channels, self.kernel_size, self.kernel_size)) #(2, 1, 5, 5)
 
 
-
     def forward(self, data) -> np.ndarray:
         """
         Compute the convolution output for a batch and apply activation.
@@ -99,13 +98,10 @@ class Convolution():
         st  = self.stride
         pd  = self.padding # $frac{d+2p-k}{s}$
         n = self.d_inputs
-        #print(f'({self.d_inputs} + ({2}*{pd}) - {k_s})/{st}')
-        #print("PADDING: ", (self.d_inputs + (2*pd) - k_s)/st)
         b   = self.bias
         out_conv = np.empty((len(data), self.on_channels, self.d_inputs//st, self.d_inputs//st)) # (Number of image, output in layer, H data, W data)
-        print('dataS :', data.shape)
-        print('weightS :', self.weights.shape)
-        print('outS: ', out_conv.shape, "\n")
+        print('data in:  ', data.shape)
+        print('weight:   ', self.weights.shape)
 
         for i, image in enumerate(data):
             for datum in image:
@@ -151,9 +147,9 @@ class Pooling():
             for k in range(len(pooled_input[0])): # Runs though every kernel for neuron layer
                 for r_i, r in enumerate(range(0, o_d, d)):
                     for c_i, c in enumerate(range(0, o_d, d)):
-
                         window = data[k, r:r+d, c:c+d] # Get window to downsample
                         out[d_i, k, r_i, c_i] = np.max(window) # Places downsampled pixel in new downsampled array
+        print('data out: ', out.shape)
         return out
 
 
@@ -164,7 +160,6 @@ if __name__ == "__main__":
     sigmoid:function = lambda x:     1 / (1 + np.exp(-x))
     softmax:function = lambda x, i:  (np.exp(x[i]))/(sum(np.exp(x)))
 
-
     folder = Path("../data/test_data_256x256")
     paths = sorted(folder.glob("*.png"))
     # Converts images to grayscale dataset (n images, 1, 256, 256)
@@ -172,7 +167,6 @@ if __name__ == "__main__":
     input_dimension = len(dataset[0,0])
     dataset_number = len(dataset)
     pool = Pooling()
-    #HAS_FAST_OPS = False
     print("Cython:", HAS_FAST_OPS)
 
     begin_time = time.perf_counter()
@@ -274,58 +268,34 @@ if __name__ == "__main__":
     #wt = np.random.randn(k, len(flatten[1])) * 0.01 # Weights
     flatten = out_4.mean(axis=(2,3))   # (n, c)  global avg pool $F\in{\mathbb{R}^{(N,C,H,W)}}\to{G\in{\mathbb{R}^{(N,C)}}}$
     wt = np.random.uniform(-1, 1, (k, c))
-    print('OUT: ', out_4.shape)
-    print('GAP: ', flatten.shape)
+    print('GAP:   ', flatten.shape)
 
     y = np.array([0, 0, 1, 0, 0]) # Truth classifications; Class 1 is Aiko all others class 0
+    one_hot = np.array(((y), (1-y))).T
+    #print(f"Hot Array: {one_hot} \n Shape: {one_hot.shape}")
 
-    for step in range(1000):
+    # /////[HEAD]//////////////////////////////////////////////////////////////////////////////
 
-        # Class votes through weighted sum of all features; largest logits is the winning class
-        logits = flatten @ wt.T + b # [i, j] (image, class) image i from class j (5, 2)
+    # Class votes through weighted sum of all features; largest logits is the winning class
+    logits = flatten @ wt.T + b # [i, j] (image, class) image i from class j (5, 2)
+    print('LOGIT: ', logits.shape)
+    # Softmax for creating a probability distribution of logits raw scores
+    logits_shift = logits - logits.max(axis=1, keepdims=True) # Shifts logit to avoid expo map issues
+    # $\Large\frac{e^{zk-kmax}}{\sum_k{e^{zk-kmax}}}$
+    probs = np.exp(logits_shift) # Numerator
+    probs /= probs.sum(axis=1, keepdims=True) # Denominator
+    print('PROB:  ', probs.shape)
 
-        # Softmax for creating a probability distribution of logits raw scores
-        logits_shift = logits - logits.max(axis=1, keepdims=True) # Shifts logit to avoid expo map issues
-        # $\Large\frac{e^{zk-kmax}}{\sum_k{e^{zk-kmax}}}$
-        probs = np.exp(logits_shift)
-        probs /= probs.sum(axis=1, keepdims=True) # Per row
-
-        # Loss
-        #predict = np.argmax(probs, axis=1) # Inference
-        #print("Prob Selection: ", probs[np.arange(n), y])
-        loss = -np.mean(np.log(probs[np.arange(n), y] + 1e-12)) # Small float; never log 0
-
-        if step % 100 == 0:
-            pred = np.argmax(probs, axis=1)
-            acc = (pred == y).mean()
-            print(f'Step:{step} | Loss:{loss} | accuracy:{acc} | Prediction:{pred}')
-
-        # Backward
-        dlogits = probs.copy()
-        dlogits[np.arange(n), y] -= 1
-        dlogits /= n
-
-        dW = dlogits.T @ flatten
-        db = dlogits.sum(axis=0)
-
-        # Update
-        wt -= lr * dW # Weights
-        b -= lr * db # Bias
-
-
-    #print('FSHAPE: ', flatten.shape)
-    #print('WSHAPE: ', w.T.shape)
-    #print('LSHAPE: ', logits.shape)
-    #print('LOGITS: ', logits)
-    #print('SHIFT:  ', logits_shift)
-    print('SHAPES: ', probs.shape)
-    print('PROBS:  ', probs)
-
-
-    #end = time.perf_counter()
+    # Loss
+    #predict = np.argmax(probs, axis=1) # Inference
+    #print("Prob Selection: ", probs[np.arange(n), y])
+    loss = -np.mean(np.log(probs[np.arange(n), y] + 1e-12)) # Small float; never log 0 (negative reverses log output)
+    print('LOSS:  ', loss.shape, "\n")
+    #print('SHAPES: ', probs.shape)
+    #print('PROBS:  ', probs)
     print(f'Total Time: {(time.perf_counter() - begin_time):.3f}')
 
-    # ///////////////////////////////////////////////////////////////////////////////////////////////////
+    # /////[GRAPH]//////////////////////////////////////////////////////////////////////////////
     layer = 5
     d_n = dataset_number
 
@@ -333,7 +303,7 @@ if __name__ == "__main__":
     fig, axes = plt.subplots(len(out_0)*layer, len(out_0[0])+1, figsize=(6, 20), constrained_layout=True)
 
     for n in range(layer):
-        #axes[n*layer, 0].set_ylabel(f"Layer {n}", size=12)
+
         for r in range(len(axes)//layer):
             axes[r,0].imshow(dataset[r,0], cmap='gray') # Maps original dataset to first row
             axes[r,0].axis('off')
@@ -362,6 +332,4 @@ if __name__ == "__main__":
                 for c in range(len(axes[0])):
                     axes[d_n*n+r,c].imshow(out_4[r,c], cmap='gray') # Maps kernel outputs to successive rows
                     axes[d_n*n+r,c].axis('off')
-
-
     plt.show()
