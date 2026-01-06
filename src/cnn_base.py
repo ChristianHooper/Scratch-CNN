@@ -13,7 +13,7 @@ from pathlib import Path
 from PIL import Image
 
 
-try:
+try: # Configures cython functions
     import fast_ops
     HAS_FAST_OPS = True
 except ImportError:
@@ -73,7 +73,6 @@ class Convolution():
         """
         fan_in  = self.in_channels * self.kernel_size * self.kernel_size # In-channels, kernel_h,
         fan_out = self.on_channels  * self.kernel_size * self.kernel_size # Out-channels, kernel_h, kernel_w
-        #print(fan_in, fan_out)
         limit   = (-np.sqrt(6.0 / (fan_in + fan_out)), np.sqrt(6.0 / (fan_in + fan_out)))
         return  rng.uniform(*limit, size=(self.on_channels, self.kernel_size, self.kernel_size)) #(2, 1, 5, 5)
 
@@ -120,29 +119,6 @@ class Convolution():
         return out_conv
 
 
-        '''
-        dm  = (self.d_inputs - (self.padding * 2)) // self.stride  # How many times kernel will move across a dimension
-        out_conv = np.empty((len(data), self.on_channels, self.d_inputs//st, self.d_inputs//st)) # (Number of image, output in layer, H data, W data)
-
-        #print('DATA: ', data.shape)
-        print('WEIGHT: ', self.weights.shape)
-        for k_i, k in enumerate(self.weights): # Singles out weight/kernels for set of neurons
-            for d_i, datum in enumerate(data): # Separates single data image to be passed through layer of neurons
-                print('datum: ', datum.shape)
-                print('weight: ', k_i, '\n')
-                #np.pad(datum[k_i//2], ((pd, pd), (pd, pd)))
-                #print(f'LEN: {self.d_inputs} | PAD: {len(datum[k_i//2])}')
-                #print(datum[k_i//2])
-                for r in range(pd, dm*st, st): # Singles out image row with consideration to stride length
-                    for c in range(pd, dm*st, st): # Singles out column with consideration to stride
-
-                        product = (np.sum(datum[0, r:r+k_s, c:c+k_s] * k[k_i])) + b # Per pixel normalization can be added at end of formula (product / k_s**2)
-
-                        # Non-linear activation function per pixel; (pd//st+c//st) centers outputs
-                        out_conv[d_i, k_i, r//st + pd//st, c//st + pd//st] = f(product)
-        print('\n')
-        return out_conv
-        '''
 
 class Pooling():
     """Max-pooling layer with an optional Cython acceleration path."""
@@ -214,7 +190,6 @@ if __name__ == "__main__":
     )
     out_conv_0 = net_0.forward(dataset)
     out_0 = pool.forward(out_conv_0)
-    #print(out_0.shape)
     elapsed = time.perf_counter() - begin_time
     print(f'L0 Elapsed: {elapsed:.3f}\n')
     elapsed = time.perf_counter()
@@ -298,7 +273,7 @@ if __name__ == "__main__":
     #flatten = out_4.reshape(n, c * h * w) # Flatten final output into a single vector
     #wt = np.random.randn(k, len(flatten[1])) * 0.01 # Weights
     flatten = out_4.mean(axis=(2,3))   # (n, c)  global avg pool $F\in{\mathbb{R}^{(N,C,H,W)}}\to{G\in{\mathbb{R}^{(N,C)}}}$
-    wt = np.random.randn(k, c) * 0.01
+    wt = np.random.uniform(-1, 1, (k, c))
     print('OUT: ', out_4.shape)
     print('GAP: ', flatten.shape)
 
@@ -309,13 +284,15 @@ if __name__ == "__main__":
         # Class votes through weighted sum of all features; largest logits is the winning class
         logits = flatten @ wt.T + b # [i, j] (image, class) image i from class j (5, 2)
 
-        # Softmax
+        # Softmax for creating a probability distribution of logits raw scores
         logits_shift = logits - logits.max(axis=1, keepdims=True) # Shifts logit to avoid expo map issues
+        # $\Large\frac{e^{zk-kmax}}{\sum_k{e^{zk-kmax}}}$
         probs = np.exp(logits_shift)
         probs /= probs.sum(axis=1, keepdims=True) # Per row
 
         # Loss
         #predict = np.argmax(probs, axis=1) # Inference
+        #print("Prob Selection: ", probs[np.arange(n), y])
         loss = -np.mean(np.log(probs[np.arange(n), y] + 1e-12)) # Small float; never log 0
 
         if step % 100 == 0:
