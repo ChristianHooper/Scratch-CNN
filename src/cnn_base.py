@@ -271,7 +271,6 @@ if __name__ == "__main__":
     print('GAP:   ', flatten.shape)
 
     y = np.array([0, 0, 1, 0, 0]) # Truth classifications; Class 1 is Aiko all others class 0
-    one_hot = np.array(((y), (1-y))).T
     #print(f"Hot Array: {one_hot} \n Shape: {one_hot.shape}")
 
     # /////[HEAD]//////////////////////////////////////////////////////////////////////////////
@@ -287,12 +286,21 @@ if __name__ == "__main__":
     print('PROB:  ', probs.shape)
 
     # Loss
-    #predict = np.argmax(probs, axis=1) # Inference
-    #print("Prob Selection: ", probs[np.arange(n), y])
+    # $\frac{1}{N}\sum^N_n=1{-log(P_n,y_n)}$
+    print("Probs:", probs)
+    print('Arrange: ', np.arange(n))
+    print('Correct: ', y)
+    print("Prob Selection: ", probs[np.arange(n), y])
+    print("Prob LOG: ", -np.log(probs[np.arange(n), y]))
+    print("Prob LOSS: ", np.mean(-np.log(probs[np.arange(n), y])))
     loss = -np.mean(np.log(probs[np.arange(n), y] + 1e-12)) # Small float; never log 0 (negative reverses log output)
     print('LOSS:  ', loss.shape, "\n")
-    #print('SHAPES: ', probs.shape)
-    #print('PROBS:  ', probs)
+
+    #
+    one_hot = np.array(((y), (1-y))).T
+    G = (probs - one_hot) / len(y)
+    print('G: ', G)
+
     print(f'Total Time: {(time.perf_counter() - begin_time):.3f}')
 
     # /////[GRAPH]//////////////////////////////////////////////////////////////////////////////
