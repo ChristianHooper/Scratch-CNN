@@ -286,20 +286,35 @@ if __name__ == "__main__":
     print('PROB:  ', probs.shape)
 
     # Loss
-    # $\frac{1}{N}\sum^N_n=1{-log(P_n,y_n)}$
+    # $-\frac{1}{N}\sum^N_n=1{log(P_n,y_n)}$
+    print("LOGITS: ", logits)
     print("Probs:", probs)
-    print('Arrange: ', np.arange(n))
+    #print('Arrange: ', np.arange(n))
     print('Correct: ', y)
-    print("Prob Selection: ", probs[np.arange(n), y])
-    print("Prob LOG: ", -np.log(probs[np.arange(n), y]))
+    #print("Prob Selection: ", probs[np.arange(n), y])
+    #print("Prob LOG: ", -np.log(probs[np.arange(n), y]))
     print("Prob LOSS: ", np.mean(-np.log(probs[np.arange(n), y])))
-    loss = -np.mean(np.log(probs[np.arange(n), y] + 1e-12)) # Small float; never log 0 (negative reverses log output)
-    print('LOSS:  ', loss.shape, "\n")
+    loss = np.mean(-np.log(probs[np.arange(n), y] + 1e-12)) # Small float; never log 0 (negative reverses log output)
 
-    #
-    one_hot = np.array(((y), (1-y))).T
-    G = (probs - one_hot) / len(y)
+    # Loss function derivative with respects to logits: $\frac{1}{n}(p_{n,k}-Y_{n,k})$
+    one_hot = np.array(((1-y), (y))).T # TODO: Add and reorganize input data & set one-hot to the data
+    # print('One-Hot:', one_hot)
+    G = (probs - one_hot) / n # Distribution of how each logits should move to reduce loss
     print('G: ', G)
+
+    # Loss function derivate with respects to weights: $z=g\cdot{w^T}+\vec{h}\to{z'=h}$
+    L_w = G.T @ flatten # Derivative of loss
+    L_b = G.sum(axis=0) # Derivative of bias
+
+    wt = L_w # Moves weights
+    b =  L_b # Moves bias
+
+    # /////[END HEAD]//////////////////////////////////////////////////////////////////////////////
+
+    print("\n(L/w):\n", L_w)
+    print("Weights:\n", wt)
+    print("\n(L/b)\n':", L_b)
+    print("Bias:\n", b)
 
     print(f'Total Time: {(time.perf_counter() - begin_time):.3f}')
 
