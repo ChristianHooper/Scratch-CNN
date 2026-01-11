@@ -188,6 +188,7 @@ if __name__ == "__main__":
     print(f'L0 Elapsed: {elapsed:.3f}\n')
     elapsed = time.perf_counter()
 
+    '''
     # Layer 1
     net_1 = Convolution(
         activation=gelu,
@@ -254,19 +255,20 @@ if __name__ == "__main__":
     #print(out_4.shape)
     elapsed = time.perf_counter() - elapsed
     print(f'L4 Elapsed: {elapsed:.6f}\n')
+    '''
 
     # /////[HEAD]//////////////////////////////////////////////////////////////////////////////
 
     # Classifier Head (Uses flattened feature vector and computes k evidence scores)
     k = 2 # Number of classes
     b = np.zeros((k)) # Bias
-    n, c, h, w = out_4.shape
+    n, c, h, w = out_0.shape
     lr = 0.1 # Learning rate
     y = np.array([0, 0, 1, 0, 0]) # Truth classifications; Class 1 is Aiko all others class 0
 
     # GAP: This vector is the encoded version of the network for feature detection through probabilistic assignment, meaning parts of the vector classify for certain features
     #flatten = out_4.reshape(n, c * h * w) # Flatten final output into a single vector
-    flatten = out_4.mean(axis=(2,3))   # (n, c)  global avg pool $F\in{\mathbb{R}^{(N,C,H,W)}}\to{G\in{\mathbb{R}^{(N,C)}}}$
+    flatten = out_0.mean(axis=(2,3))# (n, c)  global avg pool $F\in{\mathbb{R}^{(N,C,H,W)}}\to{G\in{\mathbb{R}^{(N,C)}}}$
     print('GAP:   ', flatten.shape)
 
     # Logits: Class votes through weighted sum of all features; largest logits is the winning class
@@ -290,15 +292,16 @@ if __name__ == "__main__":
     # Loss derivative: with respects to logits: $\frac{1}{n}(p_{n,k}-Y_{n,k})$
     one_hot = np.array(((1-y), (y))).T # TODO: Add and reorganize input data & set one-hot to the data
     G = (probs - one_hot) / n # Distribution of how each logits should move to reduce loss
+    print("\ndL/dz: \n", G)
 
-    # GAP derivative
-    dL_f = G @ wt
+    # Loss derivative with respects to feature collapse (GAP derivative)
+    dL_flatten = G @ wt
+
+    print("\ndL/dF: \n", dL_flatten)
 
     # Loss derivate with respects to weights: $z=g\cdot{w^T}+\vec{h}\to{z'=h}$
     dL_w = G.T @ flatten # Derivative of loss
     dL_b = G.sum(axis=0) # Derivative of bias
-
-    
 
     # Result of back-propagation to resect weights and bias in head (using minus due to weight point to increase in loss)
     wt -= lr * dL_w # Moves weights
@@ -306,10 +309,20 @@ if __name__ == "__main__":
 
     # /////[END HEAD]//////////////////////////////////////////////////////////////////////////////
 
+    # /////[LAYER BP]//////////////////////////////////////////////////////////////////////////////
+
+    # Derivative of layer 4 with respects to weights $O4'(w)=\frac{1}{h\cdot{w}}\cdot{dl/df}$
+    H, W = out_0.shape[2], out_0.shape[3]
+    d_out_4_a = dL_flatten[:, :, None, None] / (H * W)
+    print("ALt OUT: \n", d_out_4_a)
+
+
+
+
     print(f'Total Time: {(time.perf_counter() - begin_time):.3f}')
 
     # /////[GRAPH]//////////////////////////////////////////////////////////////////////////////
-    layer = 5
+    layer = 1
     d_n = dataset_number
 
     # Graph information
@@ -325,7 +338,7 @@ if __name__ == "__main__":
                 for c in range(len(axes[0])-1):
                     axes[r,c+1].imshow(out_0[r,c], cmap='gray') # Maps kernel outputs to successive rows
                     axes[r,c+1].axis('off')
-
+        '''
             if n == 1:
                 for c in range(len(axes[0])):
                     axes[r+d_n,c].imshow(out_1[r,c], cmap='gray') # Maps kernel outputs to successive rows
@@ -345,4 +358,5 @@ if __name__ == "__main__":
                 for c in range(len(axes[0])):
                     axes[d_n*n+r,c].imshow(out_4[r,c], cmap='gray') # Maps kernel outputs to successive rows
                     axes[d_n*n+r,c].axis('off')
+        '''
     plt.show()
