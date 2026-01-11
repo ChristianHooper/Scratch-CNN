@@ -255,66 +255,56 @@ if __name__ == "__main__":
     elapsed = time.perf_counter() - elapsed
     print(f'L4 Elapsed: {elapsed:.6f}\n')
 
-
+    # /////[HEAD]//////////////////////////////////////////////////////////////////////////////
 
     # Classifier Head (Uses flattened feature vector and computes k evidence scores)
     k = 2 # Number of classes
     b = np.zeros((k)) # Bias
     n, c, h, w = out_4.shape
     lr = 0.1 # Learning rate
+    y = np.array([0, 0, 1, 0, 0]) # Truth classifications; Class 1 is Aiko all others class 0
 
-    # This vector is the encoded version of the network for feature detection through probabilistic assignment, meaning parts of the vector classify for certain features
+    # GAP: This vector is the encoded version of the network for feature detection through probabilistic assignment, meaning parts of the vector classify for certain features
     #flatten = out_4.reshape(n, c * h * w) # Flatten final output into a single vector
-    #wt = np.random.randn(k, len(flatten[1])) * 0.01 # Weights
     flatten = out_4.mean(axis=(2,3))   # (n, c)  global avg pool $F\in{\mathbb{R}^{(N,C,H,W)}}\to{G\in{\mathbb{R}^{(N,C)}}}$
-    wt = np.random.uniform(-1, 1, (k, c))
     print('GAP:   ', flatten.shape)
 
-    y = np.array([0, 0, 1, 0, 0]) # Truth classifications; Class 1 is Aiko all others class 0
-    #print(f"Hot Array: {one_hot} \n Shape: {one_hot.shape}")
-
-    # /////[HEAD]//////////////////////////////////////////////////////////////////////////////
-
-    # Class votes through weighted sum of all features; largest logits is the winning class
+    # Logits: Class votes through weighted sum of all features; largest logits is the winning class
+    # $L=h\cdot{w^T+b}$
+    wt = np.random.uniform(-1, 1, (k, c))
     logits = flatten @ wt.T + b # [i, j] (image, class) image i from class j (5, 2)
     print('LOGIT: ', logits.shape)
-    # Softmax for creating a probability distribution of logits raw scores
-    logits_shift = logits - logits.max(axis=1, keepdims=True) # Shifts logit to avoid expo map issues
+
+    # Softmax: for creating a probability distribution of logits raw scores
     # $\Large\frac{e^{zk-kmax}}{\sum_k{e^{zk-kmax}}}$
+    logits_shift = logits - logits.max(axis=1, keepdims=True) # Shifts logit to avoid expo map issues
     probs = np.exp(logits_shift) # Numerator
     probs /= probs.sum(axis=1, keepdims=True) # Denominator
     print('PROB:  ', probs.shape)
 
-    # Loss
+    # Cross-Entropy Loss: for calculating how are off the model is in its current configuration
     # $-\frac{1}{N}\sum^N_n=1{log(P_n,y_n)}$
-    print("LOGITS: ", logits)
-    print("Probs:", probs)
-    #print('Arrange: ', np.arange(n))
-    print('Correct: ', y)
-    #print("Prob Selection: ", probs[np.arange(n), y])
-    #print("Prob LOG: ", -np.log(probs[np.arange(n), y]))
-    print("Prob LOSS: ", np.mean(-np.log(probs[np.arange(n), y])))
+    print("LOSS: ", np.mean(-np.log(probs[np.arange(n), y])))
     loss = np.mean(-np.log(probs[np.arange(n), y] + 1e-12)) # Small float; never log 0 (negative reverses log output)
 
-    # Loss function derivative with respects to logits: $\frac{1}{n}(p_{n,k}-Y_{n,k})$
+    # Loss derivative: with respects to logits: $\frac{1}{n}(p_{n,k}-Y_{n,k})$
     one_hot = np.array(((1-y), (y))).T # TODO: Add and reorganize input data & set one-hot to the data
-    # print('One-Hot:', one_hot)
     G = (probs - one_hot) / n # Distribution of how each logits should move to reduce loss
-    print('G: ', G)
 
-    # Loss function derivate with respects to weights: $z=g\cdot{w^T}+\vec{h}\to{z'=h}$
-    L_w = G.T @ flatten # Derivative of loss
-    L_b = G.sum(axis=0) # Derivative of bias
+    # GAP derivative
+    dL_f = G @ wt
 
-    wt = L_w # Moves weights
-    b =  L_b # Moves bias
+    # Loss derivate with respects to weights: $z=g\cdot{w^T}+\vec{h}\to{z'=h}$
+    dL_w = G.T @ flatten # Derivative of loss
+    dL_b = G.sum(axis=0) # Derivative of bias
+
+    
+
+    # Result of back-propagation to resect weights and bias in head (using minus due to weight point to increase in loss)
+    wt -= lr * dL_w # Moves weights
+    b  -= lr * dL_b # Moves bias
 
     # /////[END HEAD]//////////////////////////////////////////////////////////////////////////////
-
-    print("\n(L/w):\n", L_w)
-    print("Weights:\n", wt)
-    print("\n(L/b)\n':", L_b)
-    print("Bias:\n", b)
 
     print(f'Total Time: {(time.perf_counter() - begin_time):.3f}')
 
