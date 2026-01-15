@@ -118,7 +118,13 @@ class Convolution():
 
 class Pooling():
     """Max-pooling layer with an optional Cython acceleration path."""
-    def forward(self, out_conv:np.ndarray, reduction:int=2) -> np.ndarray:
+
+    def __init__(self, input_shape, reduction):
+        self.input_shape = input_shape # the shape of the input
+        self.mask = np.zeros(input_shape, reduction) # Winner mask defined in pooling for back-propagation
+        self.reduction = reduction # The reduction multiple for pooling
+
+    def forward(self, out_conv:np.ndarray) -> np.ndarray:
         """
         Downsample feature maps with max-pooling.
 
@@ -136,10 +142,10 @@ class Pooling():
         """
         pooled_input = np.ascontiguousarray(out_conv, dtype=np.float32)
 
-        if HAS_FAST_OPS: return fast_ops.max_pool4d(pooled_input, reduction)
+        if HAS_FAST_OPS: return fast_ops.max_pool4d(pooled_input, self.reduction)
 
         o_d = len(pooled_input[0,0]) # HxW of the pool inputs (convolution outputs)
-        d = reduction # Downsample amount
+        d = self.reduction # Downsample amount
         m = o_d//d # Filter movement length
         out = np.zeros((len(pooled_input), len(pooled_input[0]), m, m), dtype=pooled_input.dtype)
 
@@ -147,10 +153,43 @@ class Pooling():
             for k in range(len(pooled_input[0])): # Runs though every kernel for neuron layer
                 for r_i, r in enumerate(range(0, o_d, d)):
                     for c_i, c in enumerate(range(0, o_d, d)):
-                        window = data[k, r:r+d, c:c+d] # Get window to downsample
-                        out[d_i, k, r_i, c_i] = np.max(window) # Places downsampled pixel in new downsampled array
+                        window = data[k, r:r+d, c:c+d] # Get window for downsample
+
+                        # Finds the highest value position in window vector (If same default closest indices to 0)
+                        h_v = np.argmax(window)
+
+                        # Selects the index of the highest value in the window matrices
+                        h_p = [(h_v >> 1) & 1, h_v & 1]
+
+                        # Highest value in window
+                        h = window[h_p[0], h_p[0]]
+
+                        # Places downsampled pixel in new downsampled array
+                        out[d_i, k, r_i, c_i] = h
+
+                        # Adds the highest values as a mask in the original position of the inputs highest
+                        self.mask[d_i, k, r+h_p[0], c+h_p[1]] = h
+                        #print("Window:\n", window)
+                        #print("Mask:\n", self.mask[d_i, k, r:r+d, c:c+d], "\n")
         print('data out: ', out.shape)
         return out
+
+    def backward(self, d_out): # TODO: Work this into back-propagation
+        d = self.reduction
+        mask = self.mask
+        N, C, H, W = self.input_shape # Size of the original data structure prior to pooling
+        ho, wo = H//d, W//d # Get the length for the height and width of the reduced output channels
+        dx = np.zeros_like((N, C, H, W))
+
+        for n in range(N):
+            for c in range(C):
+                for i in range(ho):
+                    for j in range(wo):
+                        r, co = i*d, j*d # Gets the input position respective to the output position
+                        mask_m = mask[n, c, r:r+d, co:co+d] # Full size
+                        dx[n, c, r:r+d, co:co+d] += d_out[n,c,i,j] * mask / mask.sum()
+        return dx
+
 
 
 if __name__ == "__main__":
@@ -166,7 +205,6 @@ if __name__ == "__main__":
     dataset = np.stack([[np.array(Image.open(p).convert("L"), dtype=np.float32) / 255.0] for p in paths])
     input_dimension = len(dataset[0,0])
     dataset_number = len(dataset)
-    pool = Pooling()
     print("Cython:", HAS_FAST_OPS)
 
     begin_time = time.perf_counter()
@@ -183,7 +221,8 @@ if __name__ == "__main__":
         stride=1
     )
     out_conv_0 = net_0.forward(dataset)
-    out_0 = pool.forward(out_conv_0)
+    pool_0 = Pooling(out_conv_0.shape)
+    out_0 = pool_0.forward(out_conv_0)
     elapsed = time.perf_counter() - begin_time
     print(f'L0 Elapsed: {elapsed:.3f}\n')
     elapsed = time.perf_counter()
@@ -283,6 +322,7 @@ if __name__ == "__main__":
     probs = np.exp(logits_shift) # Numerator
     probs /= probs.sum(axis=1, keepdims=True) # Denominator
     print('PROB:  ', probs.shape)
+    print("PROB:\n", probs)
 
     # Cross-Entropy Loss: for calculating how are off the model is in its current configuration
     # $-\frac{1}{N}\sum^N_n=1{log(P_n,y_n)}$
@@ -316,6 +356,7 @@ if __name__ == "__main__":
     d_out_4_a = dL_flatten[:, :, None, None] / (H * W)
     print("ALt OUT: \n", d_out_4_a)
 
+    pool_0.backward(d_out_4_a)
 
 
 
