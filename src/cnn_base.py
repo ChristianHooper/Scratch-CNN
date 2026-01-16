@@ -2,7 +2,7 @@
 Minimal NumPy CNN with a runnable test pipeline.
 
 The module includes a convolution layer, a pooling layer, and an optional
-Cython-backed pooling path for faster downsampling.
+Cython backed pooling path for faster downsampling (TODO: forward and back-prop).
 """
 
 import numpy as np
@@ -121,7 +121,7 @@ class Pooling():
 
     def __init__(self, input_shape, reduction):
         self.input_shape = input_shape # the shape of the input
-        self.mask = np.zeros(input_shape, reduction) # Winner mask defined in pooling for back-propagation
+        self.mask = np.zeros(input_shape) # Winner mask defined in pooling for back-propagation
         self.reduction = reduction # The reduction multiple for pooling
 
     def forward(self, out_conv:np.ndarray) -> np.ndarray:
@@ -179,7 +179,9 @@ class Pooling():
         mask = self.mask
         N, C, H, W = self.input_shape # Size of the original data structure prior to pooling
         ho, wo = H//d, W//d # Get the length for the height and width of the reduced output channels
-        dx = np.zeros_like((N, C, H, W))
+        dx = np.zeros((N, C, H, W))
+        print("MASKSHAPE: ", self.mask.shape)
+        print("DXSHAPE: ", dx.shape)
 
         for n in range(N):
             for c in range(C):
@@ -202,6 +204,7 @@ if __name__ == "__main__":
     folder = Path("../data/test_data_256x256")
     paths = sorted(folder.glob("*.png"))
     # Converts images to grayscale dataset (n images, 1, 256, 256)
+    dimension_reduction = 2
     dataset = np.stack([[np.array(Image.open(p).convert("L"), dtype=np.float32) / 255.0] for p in paths])
     input_dimension = len(dataset[0,0])
     dataset_number = len(dataset)
@@ -221,7 +224,7 @@ if __name__ == "__main__":
         stride=1
     )
     out_conv_0 = net_0.forward(dataset)
-    pool_0 = Pooling(out_conv_0.shape)
+    pool_0 = Pooling(out_conv_0.shape, dimension_reduction)
     out_0 = pool_0.forward(out_conv_0)
     elapsed = time.perf_counter() - begin_time
     print(f'L0 Elapsed: {elapsed:.3f}\n')
@@ -353,10 +356,9 @@ if __name__ == "__main__":
 
     # Derivative of layer 4 with respects to weights $O4'(w)=\frac{1}{h\cdot{w}}\cdot{dl/df}$
     H, W = out_0.shape[2], out_0.shape[3]
-    d_out_4_a = dL_flatten[:, :, None, None] / (H * W)
-    print("ALt OUT: \n", d_out_4_a)
-
-    pool_0.backward(d_out_4_a)
+    d_out_0 = dL_flatten[:, :, None, None] / (H * W)
+    print("Base out: \n", d_out_0)
+    d_out_0 = pool_0.backward(d_out_0)
 
 
 
