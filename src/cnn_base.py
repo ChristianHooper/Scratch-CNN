@@ -60,6 +60,8 @@ class Convolution():
         self.padding = kernel_size // 2
         self.weights = self.set_weights()
         self.bias = 0.02
+        self.logits: np.ndarray() # Convolutional output
+        self.xpad: np.ndarray() # Size of the convolutional output for layer padding included
 
 
     def set_weights(self) -> np.ndarray :
@@ -92,14 +94,15 @@ class Convolution():
             Activated feature maps shaped (batch, out_channels, out_h, out_w).
         """
         # Remaps variables to remove self class dictionary calls.
-        f = self.activation
+        f   = self.activation
         k_s = self.kernel_size
         i_n = self.in_channels - 1 # Static needs to be fixed
         st  = self.stride
         pd  = self.padding # $frac{d+2p-k}{s}$
-        n = self.d_inputs
+        n   = self.d_inputs
         b   = self.bias
         out_conv = np.empty((len(data), self.on_channels, self.d_inputs//st, self.d_inputs//st)) # (Number of image, output in layer, H data, W data)
+        self.xpad = out_conv.shape
         print('data in:  ', data.shape)
         print('weight:   ', self.weights.shape)
 
@@ -112,8 +115,43 @@ class Convolution():
                             product = np.sum(w * x[r:r+k_s, c:c+k_s] + b)
                             #product = np.sum(w.T @ x[r:r+k_s, c:c+k_s])+b TODO: Proper equivalence
                             out_conv[i, d, r, c] = f(product)
+        self.logits = out_conv
         return out_conv
 
+    def backwards(self, d_out, lr=0.1):
+        N, C_in, H, W = d_out.shape
+        C_out = self.on_channels
+        k = self.kernel_size
+        p = self.padding
+
+        dz = d_out * (self.logits > 0) # Activation backwards (RELU/GELU)
+
+        # Gradients
+        dW = np.zeros_like(self.set_weights)
+        db = np.zeros_like(self.bias)
+        dxpad = np.zeros_like(self.xpad)
+
+        # Accumulation
+        for n in range(N):
+            for c_o in range(C_out):
+                for i in range(H):
+                    for j in range(W):
+                        g = dz[n, c_o, i, j]
+                        db[c_o] +=g
+
+                        for c_i in range(C_in):
+                            patch = self.xpad[n, c_i, i:i+k, j:j+k]
+                            dW[c_o, c_i] += g * patch
+                            dxpad[n, c_i, i:i+k, j:j+k] += g * self.weights[c_o, c_i]
+
+        # Un-pad
+        dX = dxpad[:, :, p:p+H, p:p+W]
+
+        # Update
+        self.weights -= lr * dW
+        self.bias    -= lr * db
+
+        return dX
 
 
 class Pooling():
@@ -180,6 +218,7 @@ class Pooling():
         N, C, H, W = self.input_shape # Size of the original data structure prior to pooling
         ho, wo = H//d, W//d # Get the length for the height and width of the reduced output channels
         dx = np.zeros((N, C, H, W))
+        print("d_out:", d_out.shape)
         print("MASKSHAPE: ", self.mask.shape)
         print("DXSHAPE: ", dx.shape)
 
@@ -189,7 +228,10 @@ class Pooling():
                     for j in range(wo):
                         r, co = i*d, j*d # Gets the input position respective to the output position
                         mask_m = mask[n, c, r:r+d, co:co+d] # Full size
-                        dx[n, c, r:r+d, co:co+d] += d_out[n,c,i,j] * mask / mask.sum()
+                        #print(f"dx: {dx[n, c, r:r+d, co:co+d].shape}")
+                        #print(f"do: {d_out[n,c,i,j].shape}")
+                        #print(f"ma: {mask_m.shape}")
+                        dx[n, c, r:r+d, co:co+d] += d_out[n,c,i,j] * mask_m / mask_m.sum()
         return dx
 
 
@@ -215,7 +257,7 @@ if __name__ == "__main__":
     # Training Layers
     # Layer 0
     net_0 = Convolution(
-        activation=gelu,
+        activation=relu,
         number_dataset=dataset_number,
         input_channels=1,
         output_channels=2,
@@ -356,9 +398,12 @@ if __name__ == "__main__":
 
     # Derivative of layer 4 with respects to weights $O4'(w)=\frac{1}{h\cdot{w}}\cdot{dl/df}$
     H, W = out_0.shape[2], out_0.shape[3]
-    d_out_0 = dL_flatten[:, :, None, None] / (H * W)
-    print("Base out: \n", d_out_0)
+    print(f"H: {H}\nW: {W}")
+    d_out_0 = (dL_flatten[:, :, None, None]) / (H * W) * np.ones((n, c, H, W))
+    print("Base out shape: \n", d_out_0.shape)
     d_out_0 = pool_0.backward(d_out_0)
+    #print(d_out_0)
+    d_out_0 = net_0.backwards(d_out_0)
 
 
 
