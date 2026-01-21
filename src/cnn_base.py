@@ -348,7 +348,8 @@ if __name__ == "__main__":
     b = np.zeros((k)) # Bias
     n, c, h, w = out_0.shape
     lr = 0.1 # Learning rate
-    y = np.array([0, 0, 1, 0, 0]) # Truth classifications; Class 1 is Aiko all others class 0
+    y = np.array([[0, 0, 1, 0, 0], [1, 1, 0, 1, 1]]).T # Truth classifications; Class 1 is Aiko all others class 0
+    print("THIS IS CHANGE:", y)
 
     # GAP: This vector is the encoded version of the network for feature detection through probabilistic assignment, meaning parts of the vector classify for certain features
     #flatten = out_4.reshape(n, c * h * w) # Flatten final output into a single vector
@@ -368,15 +369,19 @@ if __name__ == "__main__":
     probs /= probs.sum(axis=1, keepdims=True) # Denominator
     print('PROB:  ', probs.shape)
     print("PROB:\n", probs)
+    print("PLOG:\n", np.log(probs))
+    print("HOT:\n", y)
 
     # Cross-Entropy Loss: for calculating how are off the model is in its current configuration
     # $-\frac{1}{N}\sum^N_n=1{log(P_n,y_n)}$
-    print("LOSS: ", np.mean(-np.log(probs[np.arange(n), y])))
-    loss = np.mean(-np.log(probs[np.arange(n), y] + 1e-12)) # Small float; never log 0 (negative reverses log output)
+    #print("LOSS: ", np.mean(-np.log(probs[np.arange(n), y])))
+    loss = -np.mean(y * np.log(probs))
+    #loss = np.mean(-np.log(probs[np.arange(n), y] + 1e-12)) # Small float; never log 0 (negative reverses log output)
+    print("LOSS:", loss)
 
     # Loss derivative: with respects to logits: $\frac{1}{n}(p_{n,k}-Y_{n,k})$
-    one_hot = np.array(((1-y), (y))).T # TODO: Add and reorganize input data & set one-hot to the data
-    G = (probs - one_hot) / n # Distribution of how each logits should move to reduce loss
+    #one_hot = np.array(((1-y), (y))).T # TODO: Add and reorganize input data & set one-hot to the data
+    G = (probs - y) / n # Distribution of how each logits should move to reduce loss
     print("\ndL/dz: \n", G)
 
     # Loss derivative with respects to feature collapse (GAP derivative)
