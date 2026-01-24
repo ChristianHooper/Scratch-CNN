@@ -29,7 +29,15 @@ class Convolution():
     Stores weights, bias, and activation to produce feature maps from an input
     batch.
     """
-    def __init__(self, activation:function, number_dataset:int, input_channels:int=1, output_channels:int=3, dimension:int=256, kernel_size:int=5, stride:int=1):
+    def __init__(self,
+        activation:function,
+        number_dataset:int,
+        layer_number:int,
+        input_channels:int=1,
+        output_channels:int=3,
+        dimension:int=256,
+        kernel_size:int=5,
+        stride:int=1):
         """
         Initialize convolution parameters and weights.
 
@@ -51,6 +59,7 @@ class Convolution():
             Convolution stride.
         """
         self.activation = activation
+        self.layer_number = layer_number
         self.n_dataset = number_dataset
         self.in_channels = input_channels
         self.on_channels = output_channels
@@ -59,7 +68,7 @@ class Convolution():
         self.stride = stride
         self.padding = kernel_size // 2
         self.weights = self.set_weights()
-        self.bias = 0.02
+        self.bias = np.full((self.n_dataset, self.on_channels), 0.02)
         self.logits: np.ndarray() # Convolutional output
         self.xpad: np.ndarray() # Size of the convolutional output for layer padding included
 
@@ -112,19 +121,20 @@ class Convolution():
                 for d, w in enumerate(self.weights):
                     for r in range(0, n, st):
                         for c in range(0, n, st):
-                            product = np.sum(w * x[r:r+k_s, c:c+k_s] + b)
+                            product = np.sum(w * x[r:r+k_s, c:c+k_s] + b[i,d])
                             #product = np.sum(w.T @ x[r:r+k_s, c:c+k_s])+b TODO: Proper equivalence
-                            out_conv[i, d, r, c] = f(product)
+                            out_conv[i, d, r, c] = product * (product > 0) # ReLU function
         self.logits = out_conv
         return out_conv
 
+    # TODO: Get the last part of back-prop for the convolution dialed in and the chain it across layers
     def backwards(self, d_out, lr=0.1):
         N, C_in, H, W = d_out.shape
         C_out = self.on_channels
         k = self.kernel_size
         p = self.padding
 
-        dz = d_out * (self.logits > 0) # Activation backwards (RELU/GELU)
+        dz = d_out * (self.logits > 0) # Activation backwards for ReLU
 
         # Gradients
         dW = np.zeros_like(self.set_weights)
@@ -212,15 +222,13 @@ class Pooling():
         print('data out: ', out.shape)
         return out
 
-    def backward(self, d_out): # TODO: Work this into back-propagation
+    def backward(self, d_out):
         d = self.reduction
         mask = self.mask
         N, C, H, W = self.input_shape # Size of the original data structure prior to pooling
         ho, wo = H//d, W//d # Get the length for the height and width of the reduced output channels
-        dx = np.zeros((N, C, H, W))
-        print("d_out:", d_out.shape)
-        print("MASKSHAPE: ", self.mask.shape)
-        print("DXSHAPE: ", dx.shape)
+        dx = np.zeros((N, C, H, W)) # Will hold the derivative of the loss with respects to the convolution input
+        print("Mask shape: ", self.mask.shape)
 
         for n in range(N):
             for c in range(C):
@@ -231,13 +239,14 @@ class Pooling():
                         #print(f"dx: {dx[n, c, r:r+d, co:co+d].shape}")
                         #print(f"do: {d_out[n,c,i,j].shape}")
                         #print(f"ma: {mask_m.shape}")
+                        # Keeps only activated position from the original input
                         dx[n, c, r:r+d, co:co+d] += d_out[n,c,i,j] * mask_m / mask_m.sum()
         return dx
 
 
-
 if __name__ == "__main__":
 
+    # Functions not is use, will convert into their own class during refactor
     relu:function    = lambda x:     max(0.0, x)
     gelu:function    = lambda x:     0.5 * x * (1 + np.tanh(np.sqrt(2/np.pi) * x + 0.044715 * x**3))
     sigmoid:function = lambda x:     1 / (1 + np.exp(-x))
@@ -260,6 +269,7 @@ if __name__ == "__main__":
         activation=relu,
         number_dataset=dataset_number,
         input_channels=1,
+        layer_number=0,
         output_channels=2,
         dimension=input_dimension,
         kernel_size=5,
@@ -349,7 +359,7 @@ if __name__ == "__main__":
     n, c, h, w = out_0.shape
     lr = 0.1 # Learning rate
     y = np.array([[0, 0, 1, 0, 0], [1, 1, 0, 1, 1]]).T # Truth classifications; Class 1 is Aiko all others class 0
-    print("THIS IS CHANGE:", y)
+
 
     # GAP: This vector is the encoded version of the network for feature detection through probabilistic assignment, meaning parts of the vector classify for certain features
     #flatten = out_4.reshape(n, c * h * w) # Flatten final output into a single vector
@@ -369,7 +379,7 @@ if __name__ == "__main__":
     probs /= probs.sum(axis=1, keepdims=True) # Denominator
     print('PROB:  ', probs.shape)
     print("PROB:\n", probs)
-    print("PLOG:\n", np.log(probs))
+    #print("PLOG:\n", np.log(probs))
     print("HOT:\n", y)
 
     # Cross-Entropy Loss: for calculating how are off the model is in its current configuration
@@ -384,31 +394,35 @@ if __name__ == "__main__":
     G = (probs - y) / n # Distribution of how each logits should move to reduce loss
     print("\ndL/dz: \n", G)
 
-    # Loss derivative with respects to feature collapse (GAP derivative)
-    dL_flatten = G @ wt
-
-    print("\ndL/dF: \n", dL_flatten)
-
     # Loss derivate with respects to weights: $z=g\cdot{w^T}+\vec{h}\to{z'=h}$
     dL_w = G.T @ flatten # Derivative of loss
     dL_b = G.sum(axis=0) # Derivative of bias
+    dL_h = G @ wt # Derivative with respects to logits input
+
+    print("\ndL/dh: \n", dL_h) # Derivative of with with respects to logits input
 
     # Result of back-propagation to resect weights and bias in head (using minus due to weight point to increase in loss)
     wt -= lr * dL_w # Moves weights
     b  -= lr * dL_b # Moves bias
 
+    # Derivative of layer 4 with respects to weights $O4'(w)=\frac{1}{h\cdot{w}}\cdot{dl/df}$
+    H, W = out_0.shape[2], out_0.shape[3]
+    print(f"H: {H}\nW: {W}")
+
+    # Loss derivative with respects to feature collapse (GAP derivative)
+    d_out_0 = (dL_h[:, :, None, None]) / (H * W) * np.ones((n, c, H, W))
+
+
     # /////[END HEAD]//////////////////////////////////////////////////////////////////////////////
 
     # /////[LAYER BP]//////////////////////////////////////////////////////////////////////////////
 
-    # Derivative of layer 4 with respects to weights $O4'(w)=\frac{1}{h\cdot{w}}\cdot{dl/df}$
-    H, W = out_0.shape[2], out_0.shape[3]
-    print(f"H: {H}\nW: {W}")
-    d_out_0 = (dL_flatten[:, :, None, None]) / (H * W) * np.ones((n, c, H, W))
-    print("Base out shape: \n", d_out_0.shape)
+    print("Base out shape: ", d_out_0.shape)
+
     d_out_0 = pool_0.backward(d_out_0)
-    #print(d_out_0)
-    d_out_0 = net_0.backwards(d_out_0)
+    print("Pool out shape: ", d_out_0.shape)
+    # d_out_0 = net_0.backwards(d_out_0)
+    print("Conv out shape: ", d_out_0.shape)
 
 
 
