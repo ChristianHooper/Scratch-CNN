@@ -69,8 +69,12 @@ class Convolution():
         self.padding = kernel_size // 2
         self.weights = self.set_weights()
         self.bias = np.full((self.n_dataset, self.on_channels), 0.02)
+        self.xpad = np.pad( # Channel  dimensions with added padding
+            np.zeros((dimension, dimension)),
+            ((self.padding, self.padding),
+            (self.padding, self.padding)),
+            mode='edge')
         self.logits: np.ndarray() # Convolutional output
-        self.xpad: np.ndarray() # Size of the convolutional output for layer padding included
 
 
     def set_weights(self) -> np.ndarray :
@@ -110,14 +114,16 @@ class Convolution():
         pd  = self.padding # $frac{d+2p-k}{s}$
         n   = self.d_inputs
         b   = self.bias
+        h_w = self.d_inputs
         out_conv = np.empty((len(data), self.on_channels, self.d_inputs//st, self.d_inputs//st)) # (Number of image, output in layer, H data, W data)
-        self.xpad = out_conv.shape
+        #self.xpad = np.pad(np.zeros((h_w, h_w)), ((pd, pd,), (pd, pd)), mode='edge')
         print('data in:  ', data.shape)
         print('weight:   ', self.weights.shape)
 
         for i, image in enumerate(data):
             for datum in image:
-                x = np.pad(datum, ((pd, pd,), (pd, pd)), mode='edge') # Pads input image (wrap, edge, constant(default))
+                x = self.xpad # Pads input image (wrap, edge, constant(default))
+                print("data-in padding: ", x.shape)
                 for d, w in enumerate(self.weights):
                     for r in range(0, n, st):
                         for c in range(0, n, st):
@@ -140,6 +146,7 @@ class Convolution():
         dW = np.zeros_like(self.set_weights)
         db = np.zeros_like(self.bias)
         dxpad = np.zeros_like(self.xpad)
+        print("back pd: ", dxpad)
 
         # Accumulation
         for n in range(N):
@@ -246,7 +253,7 @@ class Pooling():
 
 if __name__ == "__main__":
 
-    # Functions not is use, will convert into their own class during refactor
+    # TODO: Functions not is use, will convert into their own class during refactor
     relu:function    = lambda x:     max(0.0, x)
     gelu:function    = lambda x:     0.5 * x * (1 + np.tanh(np.sqrt(2/np.pi) * x + 0.044715 * x**3))
     sigmoid:function = lambda x:     1 / (1 + np.exp(-x))
@@ -358,7 +365,7 @@ if __name__ == "__main__":
     b = np.zeros((k)) # Bias
     n, c, h, w = out_0.shape
     lr = 0.1 # Learning rate
-    y = np.array([[0, 0, 1, 0, 0], [1, 1, 0, 1, 1]]).T # Truth classifications; Class 1 is Aiko all others class 0
+    y = np.array([[0, 0, 0, 1, 0, 0], [1, 1, 1, 0, 1, 1]]).T # Truth classifications; (For testing classes [anime, manga])
 
 
     # GAP: This vector is the encoded version of the network for feature detection through probabilistic assignment, meaning parts of the vector classify for certain features
@@ -421,7 +428,7 @@ if __name__ == "__main__":
 
     d_out_0 = pool_0.backward(d_out_0)
     print("Pool out shape: ", d_out_0.shape)
-    # d_out_0 = net_0.backwards(d_out_0)
+    d_out_0 = net_0.backwards(d_out_0)
     print("Conv out shape: ", d_out_0.shape)
 
 
