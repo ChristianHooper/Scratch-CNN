@@ -8,6 +8,7 @@ Cython backed pooling path for faster downsampling (TODO: forward and back-prop)
 import numpy as np
 import matplotlib.pyplot as plt
 import time
+import math
 from typing import Callable
 from pathlib import Path
 from PIL import Image
@@ -68,10 +69,10 @@ class Convolution():
         self.stride = stride
         self.padding = kernel_size // 2
         self.weights = self.set_weights()
-        self.bias = np.full((self.n_dataset, self.on_channels), 0.02)
-        self.xpad = np.pad( # Channel  dimensions with added padding
-            np.zeros((dimension, dimension)),
-            ((self.padding, self.padding),
+        self.bias = np.full((output_channels), 0.02)
+        self.xpad = np.pad(np.zeros((input_channels, dimension, dimension)), # Channel dimensions with added padding
+            ((0, 0),
+            (self.padding, self.padding),
             (self.padding, self.padding)),
             mode='edge')
         self.logits: np.ndarray() # Convolutional output
@@ -89,7 +90,7 @@ class Convolution():
         fan_in  = self.in_channels * self.kernel_size * self.kernel_size # In-channels, kernel_h,
         fan_out = self.on_channels  * self.kernel_size * self.kernel_size # Out-channels, kernel_h, kernel_w
         limit   = (-np.sqrt(6.0 / (fan_in + fan_out)), np.sqrt(6.0 / (fan_in + fan_out)))
-        return  rng.uniform(*limit, size=(self.on_channels, self.kernel_size, self.kernel_size)) #(2, 1, 5, 5)
+        return  rng.uniform(*limit, size=(self.on_channels, self.in_channels, self.kernel_size, self.kernel_size)) #(2, 1, 5, 5)
 
 
     def forward(self, data) -> np.ndarray:
@@ -117,19 +118,21 @@ class Convolution():
         h_w = self.d_inputs
         out_conv = np.empty((len(data), self.on_channels, self.d_inputs//st, self.d_inputs//st)) # (Number of image, output in layer, H data, W data)
         #self.xpad = np.pad(np.zeros((h_w, h_w)), ((pd, pd,), (pd, pd)), mode='edge')
+        x = self.xpad # Holds all datum object for convolution
         print('data in:  ', data.shape)
         print('weight:   ', self.weights.shape)
 
         for i, image in enumerate(data):
-            for datum in image:
-                x = self.xpad # Pads input image (wrap, edge, constant(default))
-                print("data-in padding: ", x.shape)
-                for d, w in enumerate(self.weights):
-                    for r in range(0, n, st):
-                        for c in range(0, n, st):
-                            product = np.sum(w * x[r:r+k_s, c:c+k_s] + b[i,d])
-                            #product = np.sum(w.T @ x[r:r+k_s, c:c+k_s])+b TODO: Proper equivalence
-                            out_conv[i, d, r, c] = product * (product > 0) # ReLU function
+            x[:, pd:pd+h_w, pd:pd+h_w] = image # Inserts data into padded container
+            #print("data-in padding: ", x.shape)
+            for d, w in enumerate(self.weights):
+                #print("COMPUTE WEIGHT:", w.shape)
+                for r in range(0, n, st):
+                    for c in range(0, n, st):
+                        #print(f"THE OPERATION: {w.shape} * {x[:,r:r+k_s, c:c+k_s].shape} + {b[d]}")
+                        product = np.sum(w * x[:, r:r+k_s, c:c+k_s]) + b[d]
+                        #product = np.sum(w.T @ x[r:r+k_s, c:c+k_s])+b TODO: Proper equivalence
+                        out_conv[i, d, r, c] = product * (product > 0) # ReLU function
         self.logits = out_conv
         return out_conv
 
@@ -143,26 +146,26 @@ class Convolution():
         dz = d_out * (self.logits > 0) # Activation backwards for ReLU
 
         # Gradients
-        dW = np.zeros_like(self.set_weights)
-        db = np.zeros_like(self.bias)
+        dW = np.zeros_like(self.weights); print("weight shape: ", dW.shape) # Derivative of the weights, to be change in layer
+        db = np.zeros_like(self.bias) # Derivative of the bias, to be change in layer
         dxpad = np.zeros_like(self.xpad)
-        print("back pd: ", dxpad)
+        print("back pd: ", dxpad.shape)
 
         # Accumulation
         for n in range(N):
             for c_o in range(C_out):
                 for i in range(H):
-                    for j in range(W):
+                    for j in range(W): # Pre-Activation
                         g = dz[n, c_o, i, j]
                         db[c_o] +=g
 
-                        for c_i in range(C_in):
+                        for c_i in range(C_in): # Post Activation
                             patch = self.xpad[n, c_i, i:i+k, j:j+k]
                             dW[c_o, c_i] += g * patch
                             dxpad[n, c_i, i:i+k, j:j+k] += g * self.weights[c_o, c_i]
 
         # Un-pad
-        dX = dxpad[:, :, p:p+H, p:p+W]
+        dX = dxpad[:, :, p:p+H, p:p+W] # Derivative of the the of the loss with respects to input data to be pushed back to prior layers
 
         # Update
         self.weights -= lr * dW
@@ -213,11 +216,12 @@ class Pooling():
                         # Finds the highest value position in window vector (If same default closest indices to 0)
                         h_v = np.argmax(window)
 
-                        # Selects the index of the highest value in the window matrices
+                        # Selects the index of the highest value in the window matrices (truth table)
                         h_p = [(h_v >> 1) & 1, h_v & 1]
 
                         # Highest value in window
                         h = window[h_p[0], h_p[0]]
+                        #print("MASK WINDOW: ", h)
 
                         # Places downsampled pixel in new downsampled array
                         out[d_i, k, r_i, c_i] = h
@@ -242,12 +246,13 @@ class Pooling():
                 for i in range(ho):
                     for j in range(wo):
                         r, co = i*d, j*d # Gets the input position respective to the output position
-                        mask_m = mask[n, c, r:r+d, co:co+d] # Full size
+                        mask_m = np.ceil(mask[n, c, r:r+d, co:co+d]) # Full size
                         #print(f"dx: {dx[n, c, r:r+d, co:co+d].shape}")
                         #print(f"do: {d_out[n,c,i,j].shape}")
-                        #print(f"ma: {mask_m.shape}")
+                        #print(f"ma: {mask_m}")
                         # Keeps only activated position from the original input
-                        dx[n, c, r:r+d, co:co+d] += d_out[n,c,i,j] * mask_m / mask_m.sum()
+                        dx[n, c, r:r+d, co:co+d] += d_out[n,c,i,j] * mask_m
+                        # print("EVAL FRAME: ", mask_m / mask_m.sum())
         return dx
 
 
@@ -275,8 +280,8 @@ if __name__ == "__main__":
     net_0 = Convolution(
         activation=relu,
         number_dataset=dataset_number,
-        input_channels=1,
         layer_number=0,
+        input_channels=1,
         output_channels=2,
         dimension=input_dimension,
         kernel_size=5,
@@ -289,11 +294,11 @@ if __name__ == "__main__":
     print(f'L0 Elapsed: {elapsed:.3f}\n')
     elapsed = time.perf_counter()
 
-    '''
     # Layer 1
     net_1 = Convolution(
-        activation=gelu,
+        activation=relu,
         number_dataset = dataset_number,
+        layer_number=1,
         input_channels = net_0.on_channels,
         output_channels = int(net_0.on_channels * 2),
         dimension = len(out_0[0,0]),
@@ -301,12 +306,13 @@ if __name__ == "__main__":
         stride=1
     )
     out_conv_1 = net_1.forward(out_0)
-    out_1 = pool.forward(out_conv_1)
+    pool_1 = Pooling(out_conv_1.shape, dimension_reduction)
+    out_1 = pool_1.forward(out_conv_1)
     #print(out_1.shape)
     elapsed = time.perf_counter() - elapsed
     print(f'L1 Elapsed: {elapsed:.3f}\n')
     elapsed = time.perf_counter()
-
+    '''
     # Layer 2
     net_2 = Convolution(
         activation=gelu,
@@ -428,15 +434,15 @@ if __name__ == "__main__":
 
     d_out_0 = pool_0.backward(d_out_0)
     print("Pool out shape: ", d_out_0.shape)
-    d_out_0 = net_0.backwards(d_out_0)
-    print("Conv out shape: ", d_out_0.shape)
+    #d_out_0 = net_0.backwards(d_out_0)
+    #print("Conv out shape: ", d_out_0.shape)
 
 
 
     print(f'Total Time: {(time.perf_counter() - begin_time):.3f}')
 
     # /////[GRAPH]//////////////////////////////////////////////////////////////////////////////
-    layer = 1
+    layer = 2 # Many layers to show in render
     d_n = dataset_number
 
     # Graph information
@@ -452,7 +458,7 @@ if __name__ == "__main__":
                 for c in range(len(axes[0])-1):
                     axes[r,c+1].imshow(out_0[r,c], cmap='gray') # Maps kernel outputs to successive rows
                     axes[r,c+1].axis('off')
-        '''
+
             if n == 1:
                 for c in range(len(axes[0])):
                     axes[r+d_n,c].imshow(out_1[r,c], cmap='gray') # Maps kernel outputs to successive rows
@@ -472,5 +478,5 @@ if __name__ == "__main__":
                 for c in range(len(axes[0])):
                     axes[d_n*n+r,c].imshow(out_4[r,c], cmap='gray') # Maps kernel outputs to successive rows
                     axes[d_n*n+r,c].axis('off')
-        '''
+
     plt.show()
