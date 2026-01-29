@@ -70,8 +70,9 @@ class Convolution():
         self.padding = kernel_size // 2
         self.weights = self.set_weights()
         self.bias = np.full((output_channels), 0.02)
-        self.xpad = np.pad(np.zeros((input_channels, dimension, dimension)), # Channel dimensions with added padding
+        self.xpad = np.pad(np.zeros((number_dataset, input_channels, dimension, dimension)), # Channel dimensions with added padding
             ((0, 0),
+            (0, 0),
             (self.padding, self.padding),
             (self.padding, self.padding)),
             mode='edge')
@@ -121,19 +122,20 @@ class Convolution():
         x = self.xpad # Holds all datum object for convolution
         print('data in:  ', data.shape)
         print('weight:   ', self.weights.shape)
+        print("Pad: ", x.shape)
 
         for i, image in enumerate(data):
-            x[:, pd:pd+h_w, pd:pd+h_w] = image # Inserts data into padded container
+            x[i, :, pd:pd+h_w, pd:pd+h_w] = image # Inserts data into padded container
             #print("data-in padding: ", x.shape)
             for d, w in enumerate(self.weights):
                 #print("COMPUTE WEIGHT:", w.shape)
                 for r in range(0, n, st):
                     for c in range(0, n, st):
                         #print(f"THE OPERATION: {w.shape} * {x[:,r:r+k_s, c:c+k_s].shape} + {b[d]}")
-                        product = np.sum(w * x[:, r:r+k_s, c:c+k_s]) + b[d]
+                        product = np.sum(w * x[i, :, r:r+k_s, c:c+k_s]) + b[d]
                         #product = np.sum(w.T @ x[r:r+k_s, c:c+k_s])+b TODO: Proper equivalence
                         out_conv[i, d, r, c] = product * (product > 0) # ReLU function
-        self.logits = out_conv
+        self.logits = out_conv # Mask for back-prop
         return out_conv
 
     # TODO: Get the last part of back-prop for the convolution dialed in and the chain it across layers
@@ -145,27 +147,28 @@ class Convolution():
 
         dz = d_out * (self.logits > 0) # Activation backwards for ReLU
         print("\nConvolution back-prop")
-        # print("RELU Back-prop: ", d_out)
-        
-        # Gradients
-        dW = np.zeros_like(self.weights); print("weight shape: ", dW.shape) # Derivative of the weights, to be change in layer
-        db = np.zeros_like(self.bias) # Derivative of the bias, to be change in layer
-        dxpad = np.zeros_like(self.xpad)
-        print("back pd: ", dxpad.shape)
 
-        # Accumulation
+        # Gradients
+        dW = np.zeros_like(self.weights); # Derivative of the weights, to be change in layer
+        db = np.zeros_like(self.bias) # Derivative of the bias, to be change in layer
+        dxpad = np.zeros_like(self.xpad) # Container for derivative values
+
+        print("back input: ", dz.shape)
+        print("back dW: ", dW.shape)
+        print("back db: ", db.shape)
+        print("back dx: ", dxpad.shape)
+        #print("back pd: ", dxpad)
+
         for n in range(N):
             for c_o in range(C_out):
+                db[c_o] += np.sum(dz[n, c_o]) # Bias derivative calculation, derives from whole feature map per pass
                 for i in range(H):
-                    for j in range(W): # Pre-Activation
+                    for j in range(W):
                         g = dz[n, c_o, i, j]
-                        db[c_o] +=g
-                        #print("NEW BIAS VALUE: ", g)
-
-                        for c_i in range(C_in): # Post Activation
-                            patch = self.xpad[c_i, i:i+k, j:j+k]
+                        for c_i in range(C_in):
+                            patch = self.xpad[n, c_i, i:i+k, j:j+k]
                             dW[c_o, c_i] += g * patch
-                            dxpad[c_i, i:i+k, j:j+k] += g * self.weights[c_o, c_i]
+                            dxpad[n, c_i, i:i+k, j:j+k] += g * self.weights[c_o,c_i]
 
         # Un-pad
         dX = dxpad[:, :, p:p+H, p:p+W] # Derivative of the the of the loss with respects to input data to be pushed back to prior layers
@@ -209,6 +212,7 @@ class Pooling():
         d = self.reduction # Downsample amount
         m = o_d//d # Filter movement length
         out = np.zeros((len(pooled_input), len(pooled_input[0]), m, m), dtype=pooled_input.dtype)
+        self.mask.fill(0.0) # Reset mask for multiple iterations
 
         for d_i, data in enumerate(pooled_input): # Separates single data image for entire layer
             for k in range(len(pooled_input[0])): # Runs though every kernel for neuron layer
@@ -223,7 +227,7 @@ class Pooling():
                         h_p = [(h_v >> 1) & 1, h_v & 1]
 
                         # Highest value in window
-                        h = window[h_p[0], h_p[0]]
+                        h = window[h_p[0], h_p[1]]
                         #print("MASK WINDOW: ", h)
 
                         # Places downsampled pixel in new downsampled array
@@ -268,13 +272,17 @@ if __name__ == "__main__":
     sigmoid:function = lambda x:     1 / (1 + np.exp(-x))
     softmax:function = lambda x, i:  (np.exp(x[i]))/(sum(np.exp(x)))
 
-    folder = Path("../data/test_data_256x256")
-    paths = sorted(folder.glob("*.png"))
+    folder = Path("../data/test_data_256x256") # class 1
+    folder_2 = Path("../data/test_data_256x256/target")
+    paths = sorted(folder.glob("*.png")) + sorted(folder_2.glob("*.png"))
     # Converts images to grayscale dataset (n images, 1, 256, 256)
     dimension_reduction = 2
     dataset = np.stack([[np.array(Image.open(p).convert("L"), dtype=np.float32) / 255.0] for p in paths])
     input_dimension = len(dataset[0,0])
     dataset_number = len(dataset)
+
+
+    print("Number of images: ", dataset_number)
     print("Cython:", HAS_FAST_OPS)
 
     begin_time = time.perf_counter()
@@ -373,81 +381,96 @@ if __name__ == "__main__":
     # Classifier Head (Uses flattened feature vector and computes k evidence scores)
     k = 2 # Number of classes
     b = np.zeros((k)) # Bias
-    n, c, h, w = out_0.shape
+    n, c, h, w = out_1.shape
     lr = 0.1 # Learning rate
-    y = np.array([[0, 0, 0, 1, 0, 0], [1, 1, 1, 0, 1, 1]]).T # Truth classifications; (For testing classes [anime, manga])
+    y = np.array([[0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]]).T # Truth classifications; (For testing classes [anime, manga])
 
-
-    # GAP: This vector is the encoded version of the network for feature detection through probabilistic assignment, meaning parts of the vector classify for certain features
-    #flatten = out_4.reshape(n, c * h * w) # Flatten final output into a single vector
-    flatten = out_0.mean(axis=(2,3))# (n, c)  global avg pool $F\in{\mathbb{R}^{(N,C,H,W)}}\to{G\in{\mathbb{R}^{(N,C)}}}$
-    print('GAP:   ', flatten.shape)
 
     # Logits: Class votes through weighted sum of all features; largest logits is the winning class
     # $L=h\cdot{w^T+b}$
     wt = np.random.uniform(-1, 1, (k, c))
-    logits = flatten @ wt.T + b # [i, j] (image, class) image i from class j (5, 2)
-    print('LOGIT: ', logits.shape)
 
-    # Softmax: for creating a probability distribution of logits raw scores
-    # $\Large\frac{e^{zk-kmax}}{\sum_k{e^{zk-kmax}}}$
-    logits_shift = logits - logits.max(axis=1, keepdims=True) # Shifts logit to avoid expo map issues
-    probs = np.exp(logits_shift) # Numerator
-    probs /= probs.sum(axis=1, keepdims=True) # Denominator
-    print('PROB:  ', probs.shape)
-    print("PROB:\n", probs)
-    #print("PLOG:\n", np.log(probs))
-    print("HOT:\n", y)
+    for t in range(8):
+        # GAP: This vector is the encoded version of the network for feature detection through probabilistic assignment, meaning parts of the vector classify for certain features
+        #flatten = out_4.reshape(n, c * h * w) # Flatten final output into a single vector
+        flatten = out_1.mean(axis=(2,3))# (n, c)  global avg pool $F\in{\mathbb{R}^{(N,C,H,W)}}\to{G\in{\mathbb{R}^{(N,C)}}}$
+        print('GAP:   ', flatten.shape)
 
-    # Cross-Entropy Loss: for calculating how are off the model is in its current configuration
-    # $-\frac{1}{N}\sum^N_n=1{log(P_n,y_n)}$
-    #print("LOSS: ", np.mean(-np.log(probs[np.arange(n), y])))
-    loss = -np.sum(y * np.log(probs + 1e-12)) / n
-    #loss = np.mean(-np.log(probs[np.arange(n), y] + 1e-12)) # Small float; never log 0 (negative reverses log output)
-    print("LOSS:", loss)
+        logits = flatten @ wt.T + b # [i, j] (image, class) image i from class j (5, 2)
+        print('LOGIT: ', logits.shape)
 
-    # Loss derivative: with respects to logits: $\frac{1}{n}(p_{n,k}-Y_{n,k})$
-    #one_hot = np.array(((1-y), (y))).T # TODO: Add and reorganize input data & set one-hot to the data
-    G = (probs - y) / n # Distribution of how each logits should move to reduce loss
-    print("\ndL/dz: \n", G)
+        # Softmax: for creating a probability distribution of logits raw scores
+        # $\Large\frac{e^{zk-kmax}}{\sum_k{e^{zk-kmax}}}$
+        logits_shift = logits - logits.max(axis=1, keepdims=True) # Shifts logit to avoid expo map issues
+        probs = np.exp(logits_shift) # Numerator
+        probs /= probs.sum(axis=1, keepdims=True) # Denominator
+        print('PROB:  ', probs.shape)
+        print("PROB:\n", probs)
+        #print("PLOG:\n", np.log(probs))
+        print("HOT:\n", y)
 
-    # Loss derivate with respects to weights: $z=g\cdot{w^T}+\vec{h}\to{z'=h}$
-    dL_w = G.T @ flatten # Derivative of loss
-    dL_b = G.sum(axis=0) # Derivative of bias
-    dL_h = G @ wt # Derivative with respects to logits input
+        # Cross-Entropy Loss: for calculating how are off the model is in its current configuration
+        # $-\frac{1}{N}\sum^N_n=1{log(P_n,y_n)}$
+        #print("LOSS: ", np.mean(-np.log(probs[np.arange(n), y])))
+        loss = -np.sum(y * np.log(probs + 1e-12)) / n
+        #loss = np.mean(-np.log(probs[np.arange(n), y] + 1e-12)) # Small float; never log 0 (negative reverses log output)
+        print("LOSS:", loss)
 
-    print("\ndL/dh: \n", dL_h) # Derivative of loss with respects to logits input
-    print("\ndL/dw: \n", dL_w) # Derivative of loss with respects to head weights
-    print("\ndL/db: \n", dL_b) # Derivative of loss with respects to head bias
+        # Loss derivative: with respects to logits: $\frac{1}{n}(p_{n,k}-Y_{n,k})$
+        #one_hot = np.array(((1-y), (y))).T # TODO: Add and reorganize input data & set one-hot to the data
+        G = (probs - y) / n # Distribution of how each logits should move to reduce loss
+        print("\ndL/dz: \n", G)
 
-    # Result of back-propagation to resect weights and bias in head (using minus due to weight point to increase in loss)
-    wt -= lr * dL_w # Moves weights
-    b  -= lr * dL_b # Moves bias
+        # Loss derivate with respects to weights: $z=g\cdot{w^T}+\vec{h}\to{z'=h}$
+        dL_w = G.T @ flatten # Derivative of loss
+        dL_b = G.sum(axis=0) # Derivative of bias
+        dL_h = G @ wt # Derivative with respects to logits input
 
-    # Derivative of layer 4 with respects to weights $O4'(w)=\frac{1}{h\cdot{w}}\cdot{dl/df}$
-    H, W = out_0.shape[2], out_0.shape[3]
-    print(f"H: {H}\nW: {W}")
+        print("\ndL/dh: \n", dL_h) # Derivative of loss with respects to logits input
+        print("\ndL/dw: \n", dL_w) # Derivative of loss with respects to head weights
+        print("\ndL/db: \n", dL_b) # Derivative of loss with respects to head bias
 
-    # Loss derivative with respects to feature collapse (GAP derivative)
-    #print(f"{dL_h[:, :, None, None]} / {(H * W)} * {np.ones((n, c, H, W))}")
-    d_out_0 = dL_h[:, :, None, None] / (H * W)
-    d_out_0 = np.broadcast_to(d_out_0, (n, c, H, W)).copy()
+        # Result of back-propagation to resect weights and bias in head (using minus due to weight point to increase in loss)
+        wt -= lr * dL_w # Moves weights
+        b  -= lr * dL_b # Moves bias
+
+        # Derivative of layer 4 with respects to weights $O4'(w)=\frac{1}{h\cdot{w}}\cdot{dl/df}$
+        H, W = out_1.shape[2], out_1.shape[3]
+        print(f"H: {H}\nW: {W}")
+
+        # Loss derivative with respects to feature collapse (GAP derivative)
+        #print(f"{dL_h[:, :, None, None]} / {(H * W)} * {np.ones((n, c, H, W))}")
+        d_out_1 = dL_h[:, :, None, None] / (H * W)
+        d_out_1 = np.broadcast_to(d_out_1, (n, c, H, W)).copy()
 
 
 
-    # /////[END HEAD]//////////////////////////////////////////////////////////////////////////////
+        # /////[END HEAD]//////////////////////////////////////////////////////////////////////////////
 
-    # /////[LAYER BP]//////////////////////////////////////////////////////////////////////////////
+        # /////[LAYER BP]//////////////////////////////////////////////////////////////////////////////
 
-    print("Pool in shape: ", d_out_0.shape)
-    print("Head out: ", d_out_0[0][0],"\n") # d_out_0[0][0].tolist()
-    d_out_0 = pool_0.backward(d_out_0)
+        print("Pool in shape: ", d_out_1.shape)
+        #print("Head out: ", d_out_1[0][0],"\n") # d_out_1[0][0].tolist()
+        d_out_1 = pool_1.backward(d_out_1)
 
-    print("pool-back zero fraction:", (d_out_0==0).mean())
-    print("pool-back min/max:", d_out_0.min(), d_out_0.max())
-    #d_out_0 = net_0.backwards(d_out_0)
-    #print("Conv out shape: ", d_out_0.shape)
+        print("pool-back zero fraction:", (d_out_1==0).mean())
+        print("pool-back min/max:", d_out_1.min(), d_out_1.max())
+        d_out_1 = net_1.backwards(d_out_1)
+        print("Conv out shape: ", d_out_1.shape)
 
+        # ///
+
+        d_out_0 = pool_0.backward(d_out_1)
+        print("pool-back zero fraction:", (d_out_0==0).mean())
+        print("pool-back min/max:", d_out_0.min(), d_out_0.max())
+        d_out_0 = net_0.backwards(d_out_0)
+        print("Conv out shape: ", d_out_0.shape)
+
+        out_conv_0 = net_0.forward(dataset)
+        out_0 = pool_0.forward(out_conv_0)
+
+        out_conv_1 = net_1.forward(out_0)
+        out_1 = pool_1.forward(out_conv_1)
 
 
     print(f'Total Time: {(time.perf_counter() - begin_time):.3f}')
