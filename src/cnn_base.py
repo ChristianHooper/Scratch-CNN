@@ -138,13 +138,15 @@ class Convolution():
 
     # TODO: Get the last part of back-prop for the convolution dialed in and the chain it across layers
     def backwards(self, d_out, lr=0.1):
-        N, C_in, H, W = d_out.shape
-        C_out = self.on_channels
+        N, C_out, H, W = d_out.shape
+        C_in = self.in_channels
         k = self.kernel_size
         p = self.padding
 
         dz = d_out * (self.logits > 0) # Activation backwards for ReLU
-
+        print("\nConvolution back-prop")
+        # print("RELU Back-prop: ", d_out)
+        
         # Gradients
         dW = np.zeros_like(self.weights); print("weight shape: ", dW.shape) # Derivative of the weights, to be change in layer
         db = np.zeros_like(self.bias) # Derivative of the bias, to be change in layer
@@ -158,11 +160,12 @@ class Convolution():
                     for j in range(W): # Pre-Activation
                         g = dz[n, c_o, i, j]
                         db[c_o] +=g
+                        #print("NEW BIAS VALUE: ", g)
 
                         for c_i in range(C_in): # Post Activation
-                            patch = self.xpad[n, c_i, i:i+k, j:j+k]
+                            patch = self.xpad[c_i, i:i+k, j:j+k]
                             dW[c_o, c_i] += g * patch
-                            dxpad[n, c_i, i:i+k, j:j+k] += g * self.weights[c_o, c_i]
+                            dxpad[c_i, i:i+k, j:j+k] += g * self.weights[c_o, c_i]
 
         # Un-pad
         dX = dxpad[:, :, p:p+H, p:p+W] # Derivative of the the of the loss with respects to input data to be pushed back to prior layers
@@ -251,6 +254,7 @@ class Pooling():
                         #print(f"do: {d_out[n,c,i,j].shape}")
                         #print(f"ma: {mask_m}")
                         # Keeps only activated position from the original input
+                        # Takes the selected mask position and transfer it to upscaled matrices
                         dx[n, c, r:r+d, co:co+d] += d_out[n,c,i,j] * mask_m
                         # print("EVAL FRAME: ", mask_m / mask_m.sum())
         return dx
@@ -398,7 +402,7 @@ if __name__ == "__main__":
     # Cross-Entropy Loss: for calculating how are off the model is in its current configuration
     # $-\frac{1}{N}\sum^N_n=1{log(P_n,y_n)}$
     #print("LOSS: ", np.mean(-np.log(probs[np.arange(n), y])))
-    loss = -np.mean(y * np.log(probs))
+    loss = -np.sum(y * np.log(probs + 1e-12)) / n
     #loss = np.mean(-np.log(probs[np.arange(n), y] + 1e-12)) # Small float; never log 0 (negative reverses log output)
     print("LOSS:", loss)
 
@@ -412,7 +416,9 @@ if __name__ == "__main__":
     dL_b = G.sum(axis=0) # Derivative of bias
     dL_h = G @ wt # Derivative with respects to logits input
 
-    print("\ndL/dh: \n", dL_h) # Derivative of with with respects to logits input
+    print("\ndL/dh: \n", dL_h) # Derivative of loss with respects to logits input
+    print("\ndL/dw: \n", dL_w) # Derivative of loss with respects to head weights
+    print("\ndL/db: \n", dL_b) # Derivative of loss with respects to head bias
 
     # Result of back-propagation to resect weights and bias in head (using minus due to weight point to increase in loss)
     wt -= lr * dL_w # Moves weights
@@ -423,17 +429,22 @@ if __name__ == "__main__":
     print(f"H: {H}\nW: {W}")
 
     # Loss derivative with respects to feature collapse (GAP derivative)
-    d_out_0 = (dL_h[:, :, None, None]) / (H * W) * np.ones((n, c, H, W))
+    #print(f"{dL_h[:, :, None, None]} / {(H * W)} * {np.ones((n, c, H, W))}")
+    d_out_0 = dL_h[:, :, None, None] / (H * W)
+    d_out_0 = np.broadcast_to(d_out_0, (n, c, H, W)).copy()
+
 
 
     # /////[END HEAD]//////////////////////////////////////////////////////////////////////////////
 
     # /////[LAYER BP]//////////////////////////////////////////////////////////////////////////////
 
-    print("Base out shape: ", d_out_0.shape)
-
+    print("Pool in shape: ", d_out_0.shape)
+    print("Head out: ", d_out_0[0][0],"\n") # d_out_0[0][0].tolist()
     d_out_0 = pool_0.backward(d_out_0)
-    print("Pool out shape: ", d_out_0.shape)
+
+    print("pool-back zero fraction:", (d_out_0==0).mean())
+    print("pool-back min/max:", d_out_0.min(), d_out_0.max())
     #d_out_0 = net_0.backwards(d_out_0)
     #print("Conv out shape: ", d_out_0.shape)
 
@@ -463,7 +474,7 @@ if __name__ == "__main__":
                 for c in range(len(axes[0])):
                     axes[r+d_n,c].imshow(out_1[r,c], cmap='gray') # Maps kernel outputs to successive rows
                     axes[r+d_n,c].axis('off')
-
+            '''
             if n == 2:
                 for c in range(len(axes[0])):
                     axes[d_n*n+r,c].imshow(out_2[r,c], cmap='gray') # Maps kernel outputs to successive rows
@@ -478,5 +489,5 @@ if __name__ == "__main__":
                 for c in range(len(axes[0])):
                     axes[d_n*n+r,c].imshow(out_4[r,c], cmap='gray') # Maps kernel outputs to successive rows
                     axes[d_n*n+r,c].axis('off')
-
+            '''
     plt.show()
