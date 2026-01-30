@@ -234,7 +234,7 @@ class Pooling():
                         out[d_i, k, r_i, c_i] = h
 
                         # Adds the highest values as a mask in the original position of the inputs highest
-                        self.mask[d_i, k, r+h_p[0], c+h_p[1]] = h
+                        self.mask[d_i, k, r+h_p[0], c+h_p[1]] = 1.0
                         #print("Window:\n", window)
                         #print("Mask:\n", self.mask[d_i, k, r:r+d, c:c+d], "\n")
         print('data out: ', out.shape)
@@ -253,7 +253,7 @@ class Pooling():
                 for i in range(ho):
                     for j in range(wo):
                         r, co = i*d, j*d # Gets the input position respective to the output position
-                        mask_m = np.ceil(mask[n, c, r:r+d, co:co+d]) # Full size
+                        mask_m = mask[n, c, r:r+d, co:co+d] # Full size
                         #print(f"dx: {dx[n, c, r:r+d, co:co+d].shape}")
                         #print(f"do: {d_out[n,c,i,j].shape}")
                         #print(f"ma: {mask_m}")
@@ -320,15 +320,16 @@ if __name__ == "__main__":
     out_conv_1 = net_1.forward(out_0)
     pool_1 = Pooling(out_conv_1.shape, dimension_reduction)
     out_1 = pool_1.forward(out_conv_1)
-    #print(out_1.shape)
+
     elapsed = time.perf_counter() - elapsed
     print(f'L1 Elapsed: {elapsed:.3f}\n')
     elapsed = time.perf_counter()
-    '''
+
     # Layer 2
     net_2 = Convolution(
-        activation=gelu,
+        activation=relu,
         number_dataset = dataset_number,
+        layer_number=2,
         input_channels = net_1.on_channels,
         output_channels = int(net_1.on_channels * 2),
         dimension = len(out_1[0,0]),
@@ -336,16 +337,18 @@ if __name__ == "__main__":
         stride=1
     )
     out_conv_2 = net_2.forward(out_1)
-    out_2 = pool.forward(out_conv_2)
-    #print(out_2.shape)
+    pool_2 = Pooling(out_conv_2.shape, dimension_reduction)
+    out_2 = pool_2.forward(out_conv_2)
+
     elapsed = time.perf_counter() - elapsed
     print(f'L2 Elapsed: {elapsed:.3f}\n')
     elapsed = time.perf_counter()
 
     # Layer 3
     net_3 = Convolution(
-        activation=gelu,
+        activation=relu,
         number_dataset = dataset_number,
+        layer_number=3,
         input_channels = net_2.on_channels,
         output_channels = int(net_2.on_channels * 2),
         dimension = len(out_2[0,0]),
@@ -353,16 +356,18 @@ if __name__ == "__main__":
         stride=1
     )
     out_conv_3 = net_3.forward(out_2)
-    out_3 = pool.forward(out_conv_3)
-    #print(out_3.shape)
+    pool_3 = Pooling(out_conv_3.shape, dimension_reduction)
+    out_3 = pool_3.forward(out_conv_3)
+
     elapsed = time.perf_counter() - elapsed
     print(f'L3 Elapsed: {elapsed:.3f}\n')
     elapsed = time.perf_counter()
 
     # Layer 4
     net_4 = Convolution(
-        activation=gelu,
+        activation=relu,
         number_dataset = dataset_number,
+        layer_number=4,
         input_channels = net_3.on_channels,
         output_channels = int(net_3.on_channels * 2),
         dimension = len(out_3[0,0]),
@@ -370,30 +375,31 @@ if __name__ == "__main__":
         stride=1
     )
     out_conv_4 = net_4.forward(out_3)
-    out_4 = pool.forward(out_conv_4)
-    #print(out_4.shape)
+    pool_4 = Pooling(out_conv_4.shape, dimension_reduction)
+    out_4 = pool_4.forward(out_conv_4)
+
     elapsed = time.perf_counter() - elapsed
     print(f'L4 Elapsed: {elapsed:.6f}\n')
-    '''
+
 
     # /////[HEAD]//////////////////////////////////////////////////////////////////////////////
 
     # Classifier Head (Uses flattened feature vector and computes k evidence scores)
     k = 2 # Number of classes
     b = np.zeros((k)) # Bias
-    n, c, h, w = out_1.shape
+    n, c, h, w = out_4.shape
     lr = 0.1 # Learning rate
-    y = np.array([[0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]]).T # Truth classifications; (For testing classes [anime, manga])
+    y = np.array([[0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]]).T # Truth classifications
 
 
     # Logits: Class votes through weighted sum of all features; largest logits is the winning class
     # $L=h\cdot{w^T+b}$
     wt = np.random.uniform(-1, 1, (k, c))
 
-    for t in range(8):
+    for t in range(2):
         # GAP: This vector is the encoded version of the network for feature detection through probabilistic assignment, meaning parts of the vector classify for certain features
         #flatten = out_4.reshape(n, c * h * w) # Flatten final output into a single vector
-        flatten = out_1.mean(axis=(2,3))# (n, c)  global avg pool $F\in{\mathbb{R}^{(N,C,H,W)}}\to{G\in{\mathbb{R}^{(N,C)}}}$
+        flatten = out_4.mean(axis=(2,3))# (n, c)  global avg pool $F\in{\mathbb{R}^{(N,C,H,W)}}\to{G\in{\mathbb{R}^{(N,C)}}}$
         print('GAP:   ', flatten.shape)
 
         logits = flatten @ wt.T + b # [i, j] (image, class) image i from class j (5, 2)
@@ -435,13 +441,13 @@ if __name__ == "__main__":
         b  -= lr * dL_b # Moves bias
 
         # Derivative of layer 4 with respects to weights $O4'(w)=\frac{1}{h\cdot{w}}\cdot{dl/df}$
-        H, W = out_1.shape[2], out_1.shape[3]
+        H, W = out_4.shape[2], out_4.shape[3]
         print(f"H: {H}\nW: {W}")
 
         # Loss derivative with respects to feature collapse (GAP derivative)
         #print(f"{dL_h[:, :, None, None]} / {(H * W)} * {np.ones((n, c, H, W))}")
-        d_out_1 = dL_h[:, :, None, None] / (H * W)
-        d_out_1 = np.broadcast_to(d_out_1, (n, c, H, W)).copy()
+        d_out_4 = dL_h[:, :, None, None] / (H * W)
+        d_out_4 = np.broadcast_to(d_out_4, (n, c, H, W)).copy()
 
 
 
@@ -449,29 +455,37 @@ if __name__ == "__main__":
 
         # /////[LAYER BP]//////////////////////////////////////////////////////////////////////////////
 
-        print("Pool in shape: ", d_out_1.shape)
-        #print("Head out: ", d_out_1[0][0],"\n") # d_out_1[0][0].tolist()
-        d_out_1 = pool_1.backward(d_out_1)
-
-        print("pool-back zero fraction:", (d_out_1==0).mean())
-        print("pool-back min/max:", d_out_1.min(), d_out_1.max())
-        d_out_1 = net_1.backwards(d_out_1)
-        print("Conv out shape: ", d_out_1.shape)
-
+        d_out_4 = pool_4.backward(d_out_4)
+        d_out_4 = net_4.backwards(d_out_4)
         # ///
-
+        d_out_3 = pool_3.backward(d_out_4)
+        d_out_3 = net_3.backwards(d_out_3)
+        # ///
+        d_out_2 = pool_2.backward(d_out_3)
+        d_out_2 = net_2.backwards(d_out_2)
+        # ///
+        d_out_1 = pool_1.backward(d_out_2)
+        d_out_1 = net_1.backwards(d_out_1)
+        # /////
         d_out_0 = pool_0.backward(d_out_1)
-        print("pool-back zero fraction:", (d_out_0==0).mean())
-        print("pool-back min/max:", d_out_0.min(), d_out_0.max())
         d_out_0 = net_0.backwards(d_out_0)
-        print("Conv out shape: ", d_out_0.shape)
 
+
+        # Second forward pass
         out_conv_0 = net_0.forward(dataset)
         out_0 = pool_0.forward(out_conv_0)
-
+        # ///
         out_conv_1 = net_1.forward(out_0)
         out_1 = pool_1.forward(out_conv_1)
-
+        # ///
+        out_conv_2 = net_2.forward(out_1)
+        out_2 = pool_2.forward(out_conv_2)
+        # ///
+        out_conv_3 = net_3.forward(out_2)
+        out_3 = pool_3.forward(out_conv_3)
+        # ///
+        out_conv_4 = net_4.forward(out_3)
+        out_4 = pool_4.forward(out_conv_4)
 
     print(f'Total Time: {(time.perf_counter() - begin_time):.3f}')
 
@@ -497,7 +511,7 @@ if __name__ == "__main__":
                 for c in range(len(axes[0])):
                     axes[r+d_n,c].imshow(out_1[r,c], cmap='gray') # Maps kernel outputs to successive rows
                     axes[r+d_n,c].axis('off')
-            '''
+
             if n == 2:
                 for c in range(len(axes[0])):
                     axes[d_n*n+r,c].imshow(out_2[r,c], cmap='gray') # Maps kernel outputs to successive rows
@@ -512,5 +526,5 @@ if __name__ == "__main__":
                 for c in range(len(axes[0])):
                     axes[d_n*n+r,c].imshow(out_4[r,c], cmap='gray') # Maps kernel outputs to successive rows
                     axes[d_n*n+r,c].axis('off')
-            '''
+
     plt.show()
