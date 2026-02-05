@@ -16,35 +16,47 @@ class Convolution():
         output_multiple:int,
         stride:int,
         padding:int,
-        bias:int
+        bias:int,
+        test:bool=False
     ):
         self.layer_number = layer_number
         self.X = forward_data
-        self.N, self.C_i, self.H, self.H = input_shape
+        self.N, self.C_i, self.H, self.W = input_shape
         self.C_o = self.C_i * output_multiple
         self.fl = kernel
         self.s = stride
         self.p = padding
-        print(np.floor(self.H + (2*self.p) - self.fl)/self.s)
+        self.test = test
 
         # Container for storing data input for calculation $\lfloor{\frac{length+2p}{s}}\rfloor$
         self.X_c = np.zeros(
             ( self.N,
-            self.C_o,
+            self.C_i,
             int((self.H + (2*self.p))/self.s),
             int((self.H + (2*self.p))/self.s)
             )
         )
         self.b = np.full(self.C_o, bias)
-        self.W = self.set_weights()
-        
+        self.U = self.set_weights(test=self.test)
+
         print(f'Data: {self.X.shape}')
         print(f'Data Padded: {self.X_c.shape}')
-        print(f'Weights: {self.W.shape}')
+        print(f'Weights: {self.U.shape}')
         print(f'Bias:  {self.b.shape}')
 
+    def forward(self):
+        N, C_i, C_o, H, W = self.N, self.C_i, self.C_o, self.H, self.W
+        fl, s, p = self.fl, self.s, self.p
 
-    def set_weights(self) -> np.ndarray :
+        # How many spaces the kernel slides across of the x&y-axis
+        H_o, W_o = ((H+2*p-fl)//s)+1, ((W+2*p-fl)//s)+1
+
+        # Places inputs into padded container
+        self.X_c[:, :, p:H_o+p, p:W_o+p] = self.X
+
+        #for img_set in enumerate()
+
+    def set_weights(self, test=False) -> np.ndarray :
         """
         Creates Xavier-scaled weights for the convolution kernels.
 
@@ -53,11 +65,37 @@ class Convolution():
         np.ndarray
             Tensor shaped (out_channels, in_channels, kernel_h, kernel_w).
         """
-        fan_in  = self.C_i * self.fl * self.fl # In-channels, kernel_h,
-        fan_out = self.C_o  * self.fl * self.fl # Out-channels, kernel_h, kernel_w
-        limit   = (-np.sqrt(6.0 / (fan_in + fan_out)), np.sqrt(6.0 / (fan_in + fan_out)))
-        return  rng.uniform(*limit, size=(self.C_o, self.C_i, self.fl, self.fl)) #(2, 1, 5, 5)
+        if not test:
+            fan_in  = self.C_i * self.fl * self.fl # In-channels, kernel_h,
+            fan_out = self.C_o  * self.fl * self.fl # Out-channels, kernel_h, kernel_w
+            limit   = (-np.sqrt(6.0 / (fan_in + fan_out)), np.sqrt(6.0 / (fan_in + fan_out)))
+            print("LIMIT W", limit)
+            return  rng.uniform(*limit, size=(self.C_o, self.C_i, self.fl, self.fl)) #(2, 1, 5, 5)
+        else:
+            print(f'LAYER {self.layer_number} CONVOLUTION FORWARD IS USING TEST WEIGHTS.')
+            filter_matrices = np.zeros((self.C_o, self.C_i, self.fl, self.fl))
+            for v in range(self.C_o):
+                for u in range(self.C_i):
+                    filter_matrices[v,u] = self.test_filter()
+            return filter_matrices
 
+
+    # Create an identify matrix for matrix multiplication
+    def test_filter(self, order=2):
+        matrix_space = np.zeros((self.fl, self.fl))
+        pattern = {0:(0,0), 1:(-1,1), 2:(1,-2,1)}
+
+        if order == 0: return matrix_space # Default return
+
+        # How many indices to shift to the left in diagonal render
+        shift = len(pattern[order]) - len(pattern[order-1])
+
+        for i, row in enumerate(matrix_space):
+            for n in range(len(pattern[order])):
+                index = n + i - shift # Shift to correct placement
+                if index >= len(row): index = (index-len(row))*-1 # Error correction bottom matrices
+                row[index] = pattern[order][n] # Sets each indices
+        return matrix_space
 
 class Activation():
     forward_activation = {
@@ -104,10 +142,9 @@ if __name__ == "__main__":
     evaluation = np.zeros((len(K), sum(K)))
     evaluation[0, 0:k_0] = 1 # Class 0 one-hot
     evaluation[1, k_0:] = 1  # Class 1 one-hot
-    print("EVAL\n", evaluation)
+    print("EVAL: \n", evaluation)
 
     data_raw = np.array([[np.array(Image.open(p).convert("L"), dtype=np.float32) / 255.0] for p in total_paths])
-    print("SHAPE: ", data_raw.shape)
 
     kernel_size = 5
     output_increase = 2
@@ -116,6 +153,7 @@ if __name__ == "__main__":
     bias_base = 0.1
 
     # Creates first layer of network
+    print("\n[Layer 0]")
     cl_0 = Convolution(
         layer_number = 0,
         forward_data = data_raw,
@@ -124,8 +162,10 @@ if __name__ == "__main__":
         output_multiple = output_increase,
         stride = convolution_stride,
         padding = padding_thickness,
-        bias = bias_base
+        bias = bias_base,
+        test = True
     )
+    cl_0.forward()
 
 
 
