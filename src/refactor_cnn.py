@@ -32,8 +32,8 @@ class Convolution():
         self.X_c = np.zeros(
             ( self.N,
             self.C_i,
-            int((self.H + (2*self.p))/self.s),
-            int((self.H + (2*self.p))/self.s)
+            int((self.H + (2*self.p))),
+            int((self.W + (2*self.p)))
             )
         )
         self.b = np.full(self.C_o, bias)
@@ -46,13 +46,38 @@ class Convolution():
 
     def forward(self):
         N, C_i, C_o, H, W = self.N, self.C_i, self.C_o, self.H, self.W
-        fl, s, p = self.fl, self.s, self.p
+        fl, s, p, b = self.fl, self.s, self.p, self.b
 
         # How many spaces the kernel slides across of the x&y-axis
         H_o, W_o = ((H+2*p-fl)//s)+1, ((W+2*p-fl)//s)+1
 
         # Places inputs into padded container
-        self.X_c[:, :, p:H_o+p, p:W_o+p] = self.X
+        self.X_c[:, :, p:p+H, p:p+W] = self.X # Padded inputs
+        U = self.U # Weights
+        output = np.zeros((N, C_o, H_o, W_o))
+        print("\n")
+        print(f"_o ({H_o}, {W_o})")
+        print(f'Outputs: {output.shape}')
+
+        for i, X in enumerate(self.X_c): # Extracts all feature maps for a single image set
+            for o in range(C_o):
+                for y in range(H_o):
+                    for v in range(W_o):
+                        accumulation:float=0 # Accumulated pixel value for output
+                        for j in range(C_i):
+
+                            # Extracts the kernel size window for a single feature image
+                            X_w = X[j, y*s:y*s+fl, v*s:v*s+fl]
+
+                            # Multiplies and summates single weight window by the input window
+                            single_window =  np.sum(U[o,j] * X_w)
+
+                            # Places in single pixel accumulation for each operations
+                            accumulation += single_window
+
+                        # Places single pixel in output array and adds in bias
+                        output[i, o, y, v] = accumulation + b[o]
+        return output
 
         #for img_set in enumerate()
 
@@ -123,6 +148,23 @@ class Head():
         None
 
 
+def graph_output(data, raw, layers=1):
+        # Graph information
+    fig, axes = plt.subplots(len(data)*layers, len(data[0])+1, figsize=(6, 20), constrained_layout=True)
+
+    for n in range(layers):
+
+        for r in range(len(axes)//layers):
+            axes[r,0].imshow(raw[r,0], cmap='gray') # Maps original dataset to first row
+            axes[r,0].axis('off')
+
+            if n == 0:
+                for c in range(len(axes[0])-1):
+                    axes[r,c+1].imshow(data[r,c], cmap='gray') # Maps kernel outputs to successive rows
+                    axes[r,c+1].axis('off')
+    plt.show()
+
+
 if __name__ == "__main__":
     rng = np.random.default_rng()
 
@@ -165,13 +207,7 @@ if __name__ == "__main__":
         bias = bias_base,
         test = True
     )
-    cl_0.forward()
-
-
+    output = cl_0.forward()
+    graph_output(data=output, raw=data_raw, layers=1)
 
     begin_time = time.perf_counter()
-
-
-
-
-
