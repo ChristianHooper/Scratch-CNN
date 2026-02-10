@@ -17,7 +17,8 @@ class Convolution():
         stride:int,
         padding:int,
         bias:int,
-        test:bool=False
+        test:bool=False,
+        rng_obj=np.random.default_rng()
     ):
         self.layer_number = layer_number
         self.X = forward_data
@@ -27,6 +28,7 @@ class Convolution():
         self.s = stride
         self.p = padding
         self.test = test
+        self.rng_obj = rng_obj
 
         # Container for storing data input for calculation $\lfloor{\frac{length+2p}{s}}\rfloor$
         self.X_c = np.zeros(
@@ -38,14 +40,14 @@ class Convolution():
         )
         self.b = np.full(self.C_o, bias)
         self.U = self.set_weights(test=self.test)
-        self.Y = np.zeros((self.N, self.C_o, self.H, self.W)) # Forward output for back propagation
+        self.Y = np.zeros((self.N, self.C_o, self.H//self.s, self.W//self.s)) # Forward output for back propagation
 
         print(f'Data: {self.X.shape}')
         print(f'Data Padded: {self.X_c.shape}')
         print(f'Weights: {self.U.shape}')
         print(f'Bias:  {self.b.shape}')
 
-    def forward(self):
+    def forward_convolution(self):
         N, C_i, C_o, H, W = self.N, self.C_i, self.C_o, self.H, self.W
         fl, s, p, b = self.fl, self.s, self.p, self.b
 
@@ -55,7 +57,7 @@ class Convolution():
         # Places inputs into padded container
         self.X_c[:, :, p:p+H, p:p+W] = self.X # Padded inputs
         U = self.U # Weights
-        output = np.zeros((N, C_o, H_o, W_o))
+        output = np.zeros((N, C_o, H//s, W//s))
 
         for i, X in enumerate(self.X_c): # Extracts all feature maps for a single image set
             for o in range(C_o):
@@ -77,6 +79,7 @@ class Convolution():
                         output[i, o, y, v] = accumulation + b[o]
         print("Convolution Shape: ", output.shape)
         self.Y[::] = output[::]
+        self.X_c[::] = 0 # Clears padding
         return self.Y
 
         #for img_set in enumerate()
@@ -94,7 +97,7 @@ class Convolution():
             fan_in  = self.C_i * self.fl * self.fl # In-channels, kernel_h,
             fan_out = self.C_o  * self.fl * self.fl # Out-channels, kernel_h, kernel_w
             limit   = (-np.sqrt(6.0 / (fan_in + fan_out)), np.sqrt(6.0 / (fan_in + fan_out)))
-            return  rng.uniform(*limit, size=(self.C_o, self.C_i, self.fl, self.fl)) #(2, 1, 5, 5)
+            return  self.rng_obj.uniform(*limit, size=(self.C_o, self.C_i, self.fl, self.fl)) #(2, 1, 5, 5)
         else:
             print(f'LAYER {self.layer_number} CONVOLUTION FORWARD IS USING TEST WEIGHTS.')
             filter_matrices = np.zeros((self.C_o, self.C_i, self.fl, self.fl))
@@ -102,7 +105,6 @@ class Convolution():
                 for u in range(self.C_i):
                     filter_matrices[v,u] = self.test_filter()
             return filter_matrices
-
 
     # Create an identify matrix for matrix multiplication
     def test_filter(self, order=2):
@@ -121,20 +123,20 @@ class Convolution():
                 row[index] = pattern[order][n] # Sets each indices
         return matrix_space
 
-class Activation():
 
+class Activation():
     def __init__(self, shape:tuple, function_type:str='relu'):
-        self.forward_activation = {
+        self.forward_activation_functions = {
             'relu':     lambda x: np.maximum(x, 0),
             'gelu':     lambda x: 0.5 * x * (1 + np.tanh(np.sqrt(2/np.pi) * x + 0.044715 * x**3)),
             'sigmoid':  lambda x: 1 / (1 + np.exp(-x)),
             'softmax':  lambda x: (np.exp(x[i]))/(sum(np.exp(x))) # TODO: work out i
         }
-        self.f_forward = self.forward_activation[function_type]
+        self.f_forward = self.forward_activation_functions[function_type]
         self.Y_a = np.zeros(shape)
 
     # Activation function for forwards pass
-    def forward(self, data:np.ndarray) -> np.ndarray:
+    def forward_activation(self, data:np.ndarray) -> np.ndarray:
         self.Y_a[::] = self.f_forward(data)[::]
         print("Activation Shape: ", self.Y_a.shape)
         return self.Y_a
@@ -145,12 +147,41 @@ class Pooling():
         self.N, self.C_o, H, W = input_dimensions
         self.H_p, self.W_p = (((H-stride)//stride)+1, ((W-stride)//stride)+1)
         self.s_p = stride
-        self.mask = np.zeros((self.N, self.C_o, self.H_p, self.W_p))
+        self.mask = np.zeros((self.N, self.C_o, H, W), dtype=bool)
         self.Y_p =  np.zeros((self.N, self.C_o, self.H_p, self.W_p))
-        print("Pooling Shape: ", self.Y_p.shape)
 
-    def forward_max_pooling(self):
-        None
+    def forward_max_pooling(self, data):
+        N, C_o, H_p, W_p = self.N, self.C_o, self.H_p, self.W_p
+        s_p = self.s_p
+        Y_p, mask = self.Y_p, self.mask
+
+        for i, X in enumerate(data):
+            for j in range(C_o):
+                for y in range(H_p):
+                    for v in range(W_p):
+                        # Window ranges for downsampling
+                        a_h, z_h, a_w, z_w = y*s_p, y*s_p+s_p, v*s_p, v*s_p+s_p
+
+                        # Gets window for downsampling
+                        window = X[j, a_h:z_h, a_w:z_w]
+
+                        # Selects the index of the highest value in the window matrices
+                        m_i = np.unravel_index(np.argmax(window), window.shape)
+
+                        # Finds the highest value position in window vector (If same default closest indices to 0)
+                        # m_w = np.argmax(window)
+                        # m_i = ((m_w >> 1) & 1, m_w & 1) # Only work if 2x2 (truth table)
+
+                        # Downsample single pixel placement for output which is the highest value in window
+                        Y_p[i, j, y, v] = window[m_i[0], m_i[1]]
+
+                        # Mask placement for back-propagation
+                        mask[i, j, y*s_p+m_i[0], v*s_p+m_i[1]] = True
+        self.mask[::] = mask[::]
+        self.Y_p[::]  = Y_p[::]
+        print("Pooling Shape: ", self.Y_p.shape)
+        print("Mask Shape: ", self.mask.shape)
+        return self.Y_p
 
 
 class Head():
@@ -225,25 +256,26 @@ if __name__ == "__main__":
         stride = convolution_stride,
         padding = padding_thickness,
         bias = bias_base,
-        test = False
-    ); cl_f_0 = cl_0.forward()
+        test = True,
+        rng_obj=rng
+    ); cl_f_0 = cl_0.forward_convolution() # Convolution forward pass
 
 
     # Creates layer 0 activation function class
     al_0 = Activation(
         cl_f_0.shape,
         activation
-    ); al_f_0 = al_0.forward(cl_f_0)
+    ); al_f_0 = al_0.forward_activation(cl_f_0) # Activation function forward pass
 
 
     # Create layer 0 max pooling
     pl_0 = Pooling(
         stride=pooling_stride,
         input_dimensions=al_f_0.shape
-    )
+    ); pl_f_0 = pl_0.forward_max_pooling(al_f_0) # Max-pooling forward pass
 
     # //////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    graph_output(data=al_f_0, raw=data_raw, layers=1)
+    graph_output(data=pl_f_0, raw=data_raw, layers=1)
 
-    begin_time = time.perf_counter()
+    #begin_time = time.perf_counter()
