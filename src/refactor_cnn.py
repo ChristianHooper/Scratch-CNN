@@ -63,6 +63,7 @@ class Convolution():
             for o in range(C_o):
                 for y in range(H_o):
                     for v in range(W_o):
+
                         accumulation:float=0 # Accumulated pixel value for output
                         for j in range(C_i):
 
@@ -77,6 +78,7 @@ class Convolution():
 
                         # Places single pixel in output array and adds in bias
                         output[i, o, y, v] = accumulation + b[o]
+
         print("Convolution Shape: ", output.shape)
         self.Y[::] = output[::]
         self.X_c[::] = 0 # Clears padding
@@ -159,6 +161,7 @@ class Pooling():
             for j in range(C_o):
                 for y in range(H_p):
                     for v in range(W_p):
+
                         # Window ranges for downsampling
                         a_h, z_h, a_w, z_w = y*s_p, y*s_p+s_p, v*s_p, v*s_p+s_p
 
@@ -170,13 +173,14 @@ class Pooling():
 
                         # Finds the highest value position in window vector (If same default closest indices to 0)
                         # m_w = np.argmax(window)
-                        # m_i = ((m_w >> 1) & 1, m_w & 1) # Only work if 2x2 (truth table)
+                        # m_i = ((m_w >> 1) & 1, m_w & 1) # Only works if 2x2 (truth table)
 
                         # Downsample single pixel placement for output which is the highest value in window
                         Y_p[i, j, y, v] = window[m_i[0], m_i[1]]
 
                         # Mask placement for back-propagation
                         mask[i, j, y*s_p+m_i[0], v*s_p+m_i[1]] = True
+
         self.mask[::] = mask[::]
         self.Y_p[::]  = Y_p[::]
         print("Pooling Shape: ", self.Y_p.shape)
@@ -185,25 +189,56 @@ class Pooling():
 
 
 class Head():
-    def __init__(self):
+    def __init__(self, data, evaluation, learning_rate=0.1, bias=0.1):
+        self.input = data
+        self.N, self.C_o, self.H, self.W = data.shape
+        self.eval = evaluation
+        self.K = len(evaluation) # Number of classes for evaluation
+        self.lr = learning_rate # Learning rate
+
+        # Global Average Pooling (GAP)
+        self.G = np.zeros((self.N, self.C_o))
+        self.G_d = np.zeros((self.N, self.C_o))
+
+        # Linear Classifier Head (Logits) containers
+        self.Z = np.zeros((self.N, self.K))
+        self.Z_d = np.zeros((self.N, self.K))
+        self.U = np.random.uniform(-1, 1, (K, C_o))
+        self.U_d = self.U.copy()
+        self.B = np.full(self.K, bias)
+        self.B_d = self.B.copy()
+
+        # Soft-max (probability normalization)
+        self.P = np.zeros((self.N, self.K))
+        self.P_d = np.zeros((self.N, self.K))
+
+        # Cross-Entropy Loss
+        self.L:float
+
+    def forward_gap(self):
         None
 
 
-def graph_output(data, raw, layers=1):
-        # Graph information
-    fig, axes = plt.subplots(len(data)*layers, len(data[0])+1, figsize=(6, 20), constrained_layout=True)
+
+def graph_output(data, raw, layers=1): # Prints out a copy of the original input image and one feature map along the convolution process
+    # Graph information
+    fig, axes = plt.subplots(len(raw)*layers, len(data)+1, figsize=(15, 6), constrained_layout=True)
 
     for n in range(layers):
-
-        for r in range(len(axes)//layers):
+        for r in range(len(axes)):
             axes[r,0].imshow(raw[r,0], cmap='gray') # Maps original dataset to first row
             axes[r,0].axis('off')
 
-            if n == 0:
-                for c in range(len(axes[0])-1):
-                    axes[r,c+1].imshow(data[r,c], cmap='gray') # Maps kernel outputs to successive rows
-                    axes[r,c+1].axis('off')
+            for c in range(len(data)):
+                axes[r,c+1].imshow(data[c][r][0], cmap='gray') # Maps kernel outputs to successive rows
+                axes[r,c+1].axis('off')
     plt.show()
+
+
+def clock(marker:str):
+    global past_time
+    print(f'{marker}: {(time.perf_counter() - past_time):.2f}\n')
+    past_time = time.perf_counter()
 
 
 if __name__ == "__main__":
@@ -215,7 +250,7 @@ if __name__ == "__main__":
 
     test_paths = sorted(test_directory.glob("*.png"))
     test_target_paths = sorted(test_target_directory.glob("*.png"))
-    total_paths = [test_paths[0], test_target_paths[0]] # TODO: Change TO (test_paths + test_target_paths)
+    total_paths = [test_paths[0], test_target_paths[0]] # TODO: Change TO: test_paths + test_target_paths
 
     # Class information extracted from data
     k_0, k_1 = len(test_paths), len(test_target_paths) # Images in class 0
@@ -245,6 +280,10 @@ if __name__ == "__main__":
     # Polling base parameters
     pooling_stride = 2
 
+    # Timers
+    begin_time = time.perf_counter()
+    past_time  = time.perf_counter()
+
     # Creates layer 0 of network
     print("\n[Layer 0]")
     cl_0 = Convolution(
@@ -273,9 +312,16 @@ if __name__ == "__main__":
         stride=pooling_stride,
         input_dimensions=al_f_0.shape
     ); pl_f_0 = pl_0.forward_max_pooling(al_f_0) # Max-pooling forward pass
+    clock("L0 Convolution Time")
+
+    # //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    print("[HEAD]")
+
+
 
     # //////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    graph_output(data=pl_f_0, raw=data_raw, layers=1)
+    to_graph = [cl_f_0, al_f_0, pl_f_0]
+    graph_output(data=to_graph, raw=data_raw, layers=1)
 
     #begin_time = time.perf_counter()
