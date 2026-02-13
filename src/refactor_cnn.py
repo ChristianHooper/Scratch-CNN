@@ -203,7 +203,7 @@ class Head():
         # Linear Classifier Head (Logits) containers
         self.Z = np.zeros((self.N, self.K))
         self.Z_d = np.zeros((self.N, self.K))
-        self.U = np.random.uniform(-1, 1, (K, C_o))
+        self.U = np.random.uniform(-1, 1, (self.K, self.C_o))
         self.U_d = self.U.copy()
         self.B = np.full(self.K, bias)
         self.B_d = self.B.copy()
@@ -215,23 +215,28 @@ class Head():
         # Cross-Entropy Loss
         self.L:float
 
+    # Global avg pool $F\in{\mathbb{R}^{(N,C,H,W)}}\to{G\in{\mathbb{R}^{(N,C)}}}$
     def forward_gap(self):
-        None
+        self.G[::] = self.input.mean(axis=(2, 3))[::]
+        print("GAP Shape: ", self.G)
 
 
-
-def graph_output(data, raw, layers=1): # Prints out a copy of the original input image and one feature map along the convolution process
+ # Prints out a copy of the original input image and one feature map along the convolution process
+def graph_output(data, raw, layers=1, forward_render=False):
+    f_r = 1 if forward_render == 1 else 0
+    fm_n = 0
     # Graph information
-    fig, axes = plt.subplots(len(raw)*layers, len(data)+1, figsize=(15, 6), constrained_layout=True)
-
+    fig, axes = plt.subplots(len(raw)*layers+f_r, len(data)+1, figsize=(15, 10), constrained_layout=True)
+    print("Graphing Shape: ", axes.shape)
     for n in range(layers):
-        for r in range(len(axes)):
-            axes[r,0].imshow(raw[r,0], cmap='gray') # Maps original dataset to first row
-            axes[r,0].axis('off')
+        for r in range(len(raw)):
+            axes[r+(n*2),0].imshow(raw[r,0], cmap='gray') # Maps original dataset to first row
+            axes[r+(n*2),0].axis('off')
 
-            for c in range(len(data)):
-                axes[r,c+1].imshow(data[c][r][0], cmap='gray') # Maps kernel outputs to successive rows
-                axes[r,c+1].axis('off')
+            for c in range(len(data[0])):
+                #print(f'PLACEMENT: ({r+(n*2)}, {c+1}) ' )
+                axes[r+(n*2),c+1].imshow(data[n][c][r][fm_n], cmap='gray') # Maps kernel outputs to successive rows
+                axes[r+(n*2),c+1].axis('off')
     plt.show()
 
 
@@ -262,9 +267,9 @@ if __name__ == "__main__":
     evaluation[1, k_0:] = 1  # Class 1 one-hot
     print("EVAL: \n", evaluation)
 
-    data_raw = np.array([[np.array(Image.open(p).convert("L"), dtype=np.float32) / 255.0] for p in total_paths])
+    data_raw = np.array([[np.array(Image.open(p).convert("L"), dtype=np.float32) / 255] for p in total_paths])
 
-    # //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    # //////////[LAYER VARIABLES]////////////////////////////////////////////////////////////////////////////////////////////////////
 
     # General convolution forward parameters
     # If kernel is even convolution feature ma output increased by one on HxW
@@ -272,6 +277,7 @@ if __name__ == "__main__":
     output_increase = 2
     convolution_stride = 1
     padding_thickness = kernel_size//2
+    testing = True
 
     # Activation function base parameters
     bias_base = 0.1
@@ -284,6 +290,8 @@ if __name__ == "__main__":
     begin_time = time.perf_counter()
     past_time  = time.perf_counter()
 
+    # //////////[LAYER ZERO]////////////////////////////////////////////////////////////////////////////////////////////////////
+
     # Creates layer 0 of network
     print("\n[Layer 0]")
     cl_0 = Convolution(
@@ -295,7 +303,7 @@ if __name__ == "__main__":
         stride = convolution_stride,
         padding = padding_thickness,
         bias = bias_base,
-        test = True,
+        test = testing,
         rng_obj=rng
     ); cl_f_0 = cl_0.forward_convolution() # Convolution forward pass
 
@@ -314,14 +322,84 @@ if __name__ == "__main__":
     ); pl_f_0 = pl_0.forward_max_pooling(al_f_0) # Max-pooling forward pass
     clock("L0 Convolution Time")
 
-    # //////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    print("[HEAD]")
+    # //////////[LAYER ONE]////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    # Creates layer 0 of network
+    print("\n[Layer 1]")
+    cl_1 = Convolution(
+        layer_number = 0,
+        forward_data = pl_f_0,
+        input_shape = pl_f_0.shape,
+        kernel = kernel_size,
+        output_multiple = output_increase,
+        stride = convolution_stride,
+        padding = padding_thickness,
+        bias = bias_base,
+        test = testing,
+        rng_obj=rng
+    ); cl_f_1 = cl_1.forward_convolution() # Convolution forward pass
+
+
+    # Creates layer 0 activation function class
+    al_1 = Activation(
+        cl_f_1.shape,
+        activation
+    ); al_f_1 = al_1.forward_activation(cl_f_1) # Activation function forward pass
+
+
+    # Create layer 0 max pooling
+    pl_1 = Pooling(
+        stride=pooling_stride,
+        input_dimensions=al_f_1.shape
+    ); pl_f_1 = pl_1.forward_max_pooling(al_f_1) # Max-pooling forward pass
+    clock("L1 Convolution Time")
+
+    # //////////[LAYER TWO]////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    # Creates layer 0 of network
+    print("\n[Layer 2]")
+    cl_2 = Convolution(
+        layer_number = 0,
+        forward_data = pl_f_1,
+        input_shape = pl_f_1.shape,
+        kernel = kernel_size,
+        output_multiple = output_increase,
+        stride = convolution_stride,
+        padding = padding_thickness,
+        bias = bias_base,
+        test = testing,
+        rng_obj=rng
+    ); cl_f_2 = cl_2.forward_convolution() # Convolution forward pass
+
+
+    # Creates layer 0 activation function class
+    al_2 = Activation(
+        cl_f_2.shape,
+        activation
+    ); al_f_2 = al_2.forward_activation(cl_f_2) # Activation function forward pass
+
+
+    # Create layer 0 max pooling
+    pl_2 = Pooling(
+        stride=pooling_stride,
+        input_dimensions=al_f_2.shape
+    ); pl_f_2 = pl_2.forward_max_pooling(al_f_2) # Max-pooling forward pass
+    clock("L2 Convolution Time")
+
+    # ////////////[HEAD PROCESSING]//////////////////////////////////////////////////////////////////////////////////////////////////
+
+    head = Head(pl_f_2, evaluation)
+
+    gap_h = head.forward_gap()
 
 
 
-    # //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    # ////////////[VISUALIZATION]//////////////////////////////////////////////////////////////////////////////////////////////////
 
-    to_graph = [cl_f_0, al_f_0, pl_f_0]
+    to_graph = [[cl_f_0, al_f_0, pl_f_0],
+                [cl_f_1, al_f_1, pl_f_1],
+                [cl_f_2, al_f_2, pl_f_2]
+    ]
     graph_output(data=to_graph, raw=data_raw, layers=1)
 
     #begin_time = time.perf_counter()
