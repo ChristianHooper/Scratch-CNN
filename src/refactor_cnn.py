@@ -80,8 +80,8 @@ class Convolution():
                         output[i, o, y, v] = accumulation + b[o]
 
         print("Convolution Shape: ", output.shape)
-        self.Y[::] = output[::]
-        self.X_c[::] = 0 # Clears padding
+        self.Y[:] = output[:]
+        self.X_c[:] = 0 # Clears padding
         return self.Y
 
         #for img_set in enumerate()
@@ -139,7 +139,7 @@ class Activation():
 
     # Activation function for forwards pass
     def forward_activation(self, data:np.ndarray) -> np.ndarray:
-        self.Y_a[::] = self.f_forward(data)[::]
+        self.Y_a[:] = self.f_forward(data)[:]
         print("Activation Shape: ", self.Y_a.shape)
         return self.Y_a
 
@@ -181,8 +181,8 @@ class Pooling():
                         # Mask placement for back-propagation
                         mask[i, j, y*s_p+m_i[0], v*s_p+m_i[1]] = True
 
-        self.mask[::] = mask[::]
-        self.Y_p[::]  = Y_p[::]
+        self.mask[:] = mask[:]
+        self.Y_p[:]  = Y_p[:]
         print("Pooling Shape: ", self.Y_p.shape)
         print("Mask Shape: ", self.mask.shape)
         return self.Y_p
@@ -192,7 +192,7 @@ class Head():
     def __init__(self, data, evaluation, learning_rate=0.1, bias=0.1):
         self.input = data
         self.N, self.C_o, self.H, self.W = data.shape
-        self.eval = evaluation
+        self.Y = evaluation
         self.K = len(evaluation) # Number of classes for evaluation
         self.lr = learning_rate # Learning rate
 
@@ -215,13 +215,30 @@ class Head():
         # Cross-Entropy Loss
         self.L:float
 
-    # Global avg pool $F\in{\mathbb{R}^{(N,C,H,W)}}\to{G\in{\mathbb{R}^{(N,C)}}}$
+    # Global avg pool $F\in{\mathbb{D}^{(N,C,H,W)}}\to{G\in{\mathbb{R}^{(N,C)}}}$
     def forward_gap(self):
-        self.G[::] = self.input.mean(axis=(2, 3))[::]
-        print("GAP Shape: ", self.G)
+        self.G[:] = self.input.mean(axis=(2, 3))[:]
+        print("GAP Shape: ", self.G.shape)
+
+    def forward_logits(self):
+        self.Z[:] = (self.G @ self.U.T + self.B)[:]
+        print("Logits Shape: ", self.Z.shape)
+
+    def forward_softmax(self):
+        self.P[:] = np.array([[
+            (np.exp(self.Z[n,k] - np.max(self.Z[n]))) /
+            (np.sum(np.exp(self.Z[n,:] - np.max(self.Z[n]))))
+            for k in range(self.K)]
+            for n in range(self.N)])[:]
+        print("Soft Shape: ", self.P.shape)
+        print("Classification:\n", self.P)
+
+    def forward_loss(self):
+        self.L = -np.mean(np.sum(self.Y * (np.log(self.P)+1e-12), axis=1))
+        print("Loss: ", self.L)
 
 
- # Prints out a copy of the original input image and one feature map along the convolution process
+# Prints out a copy of the original input image and one feature map along the convolution process
 def graph_output(data, raw, layers=1, forward_render=False):
     f_r = 1 if forward_render == 1 else 0
     fm_n = 0
@@ -258,7 +275,7 @@ if __name__ == "__main__":
     total_paths = [test_paths[0], test_target_paths[0]] # TODO: Change TO: test_paths + test_target_paths
 
     # Class information extracted from data
-    k_0, k_1 = len(test_paths), len(test_target_paths) # Images in class 0
+    k_0, k_1 = 1, 1 # TODO: Change TO: len(test_paths), len(test_target_paths) Images in class 0
     K = np.array([k_0, k_1]) # All class lengths
 
     # One-hot data evaluation metric
@@ -272,7 +289,7 @@ if __name__ == "__main__":
     # //////////[LAYER VARIABLES]////////////////////////////////////////////////////////////////////////////////////////////////////
 
     # General convolution forward parameters
-    # If kernel is even convolution feature ma output increased by one on HxW
+    # If kernel is even convolution feature map output increased by one on HxW
     kernel_size = 3
     output_increase = 2
     convolution_stride = 1
@@ -286,14 +303,22 @@ if __name__ == "__main__":
     # Polling base parameters
     pooling_stride = 2
 
+    # Shape array (If variable is changed layers have to be man set below; for readability)
+    layers = 3
+    shape_array = np.array((layers, len(data_raw))) # TODO: finish setting up shape array for each layer of processing
+    for n, i in enumerate(shape_array):
+        shape_array[i,:] = [data_raw[0],
+            data_raw[1] * (output_increase*n),
+            data_raw[2],
+            data_raw[3]]
+
     # Timers
     begin_time = time.perf_counter()
     past_time  = time.perf_counter()
 
-    # //////////[LAYER ZERO]////////////////////////////////////////////////////////////////////////////////////////////////////
+    # //////////[LAYER & HEAD INITIALIZATION]////////////////////////////////////////////////////////////////////////////////////////////////////
 
     # Creates layer 0 of network
-    print("\n[Layer 0]")
     cl_0 = Convolution(
         layer_number = 0,
         forward_data = data_raw,
@@ -304,28 +329,21 @@ if __name__ == "__main__":
         padding = padding_thickness,
         bias = bias_base,
         test = testing,
-        rng_obj=rng
-    ); cl_f_0 = cl_0.forward_convolution() # Convolution forward pass
-
+        rng_obj=rng)
 
     # Creates layer 0 activation function class
     al_0 = Activation(
         cl_f_0.shape,
-        activation
-    ); al_f_0 = al_0.forward_activation(cl_f_0) # Activation function forward pass
-
+        activation)
 
     # Create layer 0 max pooling
     pl_0 = Pooling(
         stride=pooling_stride,
-        input_dimensions=al_f_0.shape
-    ); pl_f_0 = pl_0.forward_max_pooling(al_f_0) # Max-pooling forward pass
-    clock("L0 Convolution Time")
+        input_dimensions=al_f_0.shape)
 
-    # //////////[LAYER ONE]////////////////////////////////////////////////////////////////////////////////////////////////////
+    # //////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    # Creates layer 0 of network
-    print("\n[Layer 1]")
+    # Creates layer 1 of network
     cl_1 = Convolution(
         layer_number = 0,
         forward_data = pl_f_0,
@@ -336,28 +354,21 @@ if __name__ == "__main__":
         padding = padding_thickness,
         bias = bias_base,
         test = testing,
-        rng_obj=rng
-    ); cl_f_1 = cl_1.forward_convolution() # Convolution forward pass
+        rng_obj=rng)
 
-
-    # Creates layer 0 activation function class
+    # Creates layer 1 activation function class
     al_1 = Activation(
         cl_f_1.shape,
-        activation
-    ); al_f_1 = al_1.forward_activation(cl_f_1) # Activation function forward pass
+        activation)
 
-
-    # Create layer 0 max pooling
+    # Create layer 1 max pooling
     pl_1 = Pooling(
         stride=pooling_stride,
-        input_dimensions=al_f_1.shape
-    ); pl_f_1 = pl_1.forward_max_pooling(al_f_1) # Max-pooling forward pass
-    clock("L1 Convolution Time")
+        input_dimensions=al_f_1.shape)
 
-    # //////////[LAYER TWO]////////////////////////////////////////////////////////////////////////////////////////////////////
+    # //////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    # Creates layer 0 of network
-    print("\n[Layer 2]")
+    # Creates layer 2 of network
     cl_2 = Convolution(
         layer_number = 0,
         forward_data = pl_f_1,
@@ -368,31 +379,44 @@ if __name__ == "__main__":
         padding = padding_thickness,
         bias = bias_base,
         test = testing,
-        rng_obj=rng
-    ); cl_f_2 = cl_2.forward_convolution() # Convolution forward pass
+        rng_obj=rng )
 
-
-    # Creates layer 0 activation function class
+    # Creates layer 2 activation function class
     al_2 = Activation(
         cl_f_2.shape,
-        activation
-    ); al_f_2 = al_2.forward_activation(cl_f_2) # Activation function forward pass
+        activation )
 
-
-    # Create layer 0 max pooling
+    # Create layer 2 max pooling
     pl_2 = Pooling(
         stride=pooling_stride,
-        input_dimensions=al_f_2.shape
-    ); pl_f_2 = pl_2.forward_max_pooling(al_f_2) # Max-pooling forward pass
+        input_dimensions=al_f_2.shape )
+
+    # ////////////[NETWORK PROCESSING]//////////////////////////////////////////////////////////////////////////////////////////////////
+
+    print("\n[Layer 0]")
+    cl_f_0 = cl_0.forward_convolution() # Convolution forward pass
+    al_f_0 = al_0.forward_activation(cl_f_0) # Activation function forward pass
+    pl_f_0 = pl_0.forward_max_pooling(al_f_0) # Max-pooling forward pass
+    clock("L0 Convolution Time")
+
+    print("\n[Layer 1]")
+    cl_f_1 = cl_1.forward_convolution() # Convolution forward pass
+    al_f_1 = al_1.forward_activation(cl_f_1) # Activation function forward pass
+    pl_f_1 = pl_1.forward_max_pooling(al_f_1) # Max-pooling forward pass
+    clock("L1 Convolution Time")
+
+    print("\n[Layer 2]")
+    cl_f_2 = cl_2.forward_convolution() # Convolution forward pass
+    al_f_2 = al_2.forward_activation(cl_f_2) # Activation function forward pass
+    pl_f_2 = pl_2.forward_max_pooling(al_f_2) # Max-pooling forward pass
     clock("L2 Convolution Time")
 
-    # ////////////[HEAD PROCESSING]//////////////////////////////////////////////////////////////////////////////////////////////////
-
-    head = Head(pl_f_2, evaluation)
-
-    gap_h = head.forward_gap()
-
-
+    print("[HEAD]")
+    head.forward_gap()
+    head.forward_logits()
+    head.forward_softmax()
+    head.forward_loss()
+    clock("Head Time")
 
     # ////////////[VISUALIZATION]//////////////////////////////////////////////////////////////////////////////////////////////////
 
