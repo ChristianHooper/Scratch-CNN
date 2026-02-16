@@ -45,7 +45,7 @@ class Convolution():
         print(f'Data: {self.X.shape}')
         print(f'Data Padded: {self.X_c.shape}')
         print(f'Weights: {self.U.shape}')
-        print(f'Bias:  {self.b.shape}')
+        print(f'Bias:  {self.b.shape}\n')
 
     def forward_convolution(self):
         N, C_i, C_o, H, W = self.N, self.C_i, self.C_o, self.H, self.W
@@ -84,8 +84,6 @@ class Convolution():
         self.X_c[:] = 0 # Clears padding
         return self.Y
 
-        #for img_set in enumerate()
-
     def set_weights(self, test=False) -> np.ndarray :
         """
         Creates Xavier-scaled weights for the convolution kernels.
@@ -121,7 +119,7 @@ class Convolution():
         for i, row in enumerate(matrix_space):
             for n in range(len(pattern[order])):
                 index = n + i - shift # Shift to correct placement
-                if index >= len(row): index = (index-len(row))*-1 # Error correction bottom matrices
+                if index >= len(row): index = (index-len(row)) * -1 # Error correction bottom matrices
                 row[index] = pattern[order][n] # Sets each indices
         return matrix_space
 
@@ -132,7 +130,7 @@ class Activation():
             'relu':     lambda x: np.maximum(x, 0),
             'gelu':     lambda x: 0.5 * x * (1 + np.tanh(np.sqrt(2/np.pi) * x + 0.044715 * x**3)),
             'sigmoid':  lambda x: 1 / (1 + np.exp(-x)),
-            'softmax':  lambda x: (np.exp(x[i]))/(sum(np.exp(x))) # TODO: work out i
+            #'softmax':  lambda x: (np.exp(x[i]))/(sum(np.exp(x))) # TODO: work out i
         }
         self.f_forward = self.forward_activation_functions[function_type]
         self.Y_a = np.zeros(shape)
@@ -232,6 +230,7 @@ class Head():
             for n in range(self.N)])[:]
         print("Soft Shape: ", self.P.shape)
         print("Classification:\n", self.P)
+        print("Evaluation:\n", self.Y)
 
     def forward_loss(self):
         self.L = -np.mean(np.sum(self.Y * (np.log(self.P)+1e-12), axis=1))
@@ -282,7 +281,6 @@ if __name__ == "__main__":
     evaluation = np.zeros((len(K), sum(K)))
     evaluation[0, 0:k_0] = 1 # Class 0 one-hot
     evaluation[1, k_0:] = 1  # Class 1 one-hot
-    print("EVAL: \n", evaluation)
 
     data_raw = np.array([[np.array(Image.open(p).convert("L"), dtype=np.float32) / 255] for p in total_paths])
 
@@ -303,16 +301,6 @@ if __name__ == "__main__":
     # Polling base parameters
     pooling_stride = 2
 
-    # Shape array (If variable is changed layers have to be man set below; for readability)
-    layers = 3
-    shape_array = np.array((layers, len(data_raw))) # TODO: finish setting up shape array for each layer of processing
-    for n, i in enumerate(shape_array):
-        shape_array[i,:] = [data_raw[0],
-            data_raw[1] * (output_increase*n),
-            data_raw[2],
-            data_raw[3]]
-
-    # Timers
     begin_time = time.perf_counter()
     past_time  = time.perf_counter()
 
@@ -333,21 +321,21 @@ if __name__ == "__main__":
 
     # Creates layer 0 activation function class
     al_0 = Activation(
-        cl_f_0.shape,
+        cl_0.Y.shape,
         activation)
 
     # Create layer 0 max pooling
     pl_0 = Pooling(
         stride=pooling_stride,
-        input_dimensions=al_f_0.shape)
+        input_dimensions=al_0.Y_a.shape)
 
     # //////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
     # Creates layer 1 of network
     cl_1 = Convolution(
-        layer_number = 0,
-        forward_data = pl_f_0,
-        input_shape = pl_f_0.shape,
+        layer_number = 1,
+        forward_data = pl_0.Y_p,
+        input_shape = pl_0.Y_p.shape,
         kernel = kernel_size,
         output_multiple = output_increase,
         stride = convolution_stride,
@@ -358,21 +346,21 @@ if __name__ == "__main__":
 
     # Creates layer 1 activation function class
     al_1 = Activation(
-        cl_f_1.shape,
+        cl_1.Y.shape,
         activation)
 
     # Create layer 1 max pooling
     pl_1 = Pooling(
         stride=pooling_stride,
-        input_dimensions=al_f_1.shape)
+        input_dimensions=al_1.Y_a.shape)
 
     # //////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
     # Creates layer 2 of network
     cl_2 = Convolution(
-        layer_number = 0,
-        forward_data = pl_f_1,
-        input_shape = pl_f_1.shape,
+        layer_number = 2,
+        forward_data = pl_1.Y_p,
+        input_shape = pl_1.Y_p.shape,
         kernel = kernel_size,
         output_multiple = output_increase,
         stride = convolution_stride,
@@ -383,13 +371,15 @@ if __name__ == "__main__":
 
     # Creates layer 2 activation function class
     al_2 = Activation(
-        cl_f_2.shape,
+        cl_2.Y.shape,
         activation )
 
     # Create layer 2 max pooling
     pl_2 = Pooling(
         stride=pooling_stride,
-        input_dimensions=al_f_2.shape )
+        input_dimensions=al_2.Y_a.shape )
+
+    head = Head(pl_2.Y_p, evaluation) # Creates class for processing head layer
 
     # ////////////[NETWORK PROCESSING]//////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -417,6 +407,7 @@ if __name__ == "__main__":
     head.forward_softmax()
     head.forward_loss()
     clock("Head Time")
+    print("Total Time: ", time.perf_counter() - begin_time, "\n")
 
     # ////////////[VISUALIZATION]//////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -425,5 +416,3 @@ if __name__ == "__main__":
                 [cl_f_2, al_f_2, pl_f_2]
     ]
     graph_output(data=to_graph, raw=data_raw, layers=1)
-
-    #begin_time = time.perf_counter()
