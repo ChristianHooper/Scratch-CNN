@@ -5,6 +5,7 @@ import math
 from typing import Callable
 from pathlib import Path
 from PIL import Image
+np.set_printoptions(suppress=True, precision=2)
 
 
 class Convolution():
@@ -208,7 +209,9 @@ class Head():
 
         # Soft-max (probability normalization)
         self.P = np.zeros((self.N, self.K))
-        self.P_d = np.zeros((self.N, self.K))
+
+        # What the model predicts in correct
+        self.prediction = np.zeros((self.N, self.K))
 
         # Cross-Entropy Loss
         self.L:float
@@ -231,10 +234,29 @@ class Head():
         print("Soft Shape: ", self.P.shape)
         print("Classification:\n", self.P)
         print("Evaluation:\n", self.Y)
+        self.forward_prediction()
+
+    def forward_prediction(self):
+        self.prediction[:] = (self.P * self.Y)[:]
+        print("Prediction:\n", self.prediction)
 
     def forward_loss(self):
         self.L = -np.mean(np.sum(self.Y * (np.log(self.P)+1e-12), axis=1))
         print("Loss: ", self.L)
+
+    # Start of the back-propagation functions below: $\frac{dx}{dy}f(h(g(x)))=f'(h(g(x))*h(g(x)*g'(x)$
+    # Calculates the derivative of the loss w.r.t logit scores
+    def backward_loss_softmax(self):
+        self.Z_d[:] = ((1/self.N) * (self.P - self.Y))[:]
+        print("Shape: ", self.Z_d.shape)
+        self.forward_prediction()
+        print("Loss Derivative w.r.t Logits:\n", self.Z_d, "\n")
+
+    def backward_loss_weights(self):
+        self.U_d = self.Z_d.T @ self.B
+        print("Shape: ", self.U_d.shape)
+        self.forward_prediction()
+        print("Loss Derivative w.r.t Weights:\n", self.U_d, "\n")
 
 
 # Prints out a copy of the original input image and one feature map along the convolution process
@@ -253,7 +275,7 @@ def graph_output(data, raw, layers=1, forward_render=False):
                 #print(f'PLACEMENT: ({r+(n*2)}, {c+1}) ' )
                 axes[r+(n*2),c+1].imshow(data[n][c][r][fm_n], cmap='gray') # Maps kernel outputs to successive rows
                 axes[r+(n*2),c+1].axis('off')
-    plt.show()
+    #plt.show()
 
 
 def clock(marker:str):
@@ -407,7 +429,13 @@ if __name__ == "__main__":
     head.forward_softmax()
     head.forward_loss()
     clock("Head Time")
+
+    print("[BACK-PROP]")
+    head.backward_loss_softmax()
+    head.backward_loss_weights()
     print("Total Time: ", time.perf_counter() - begin_time, "\n")
+
+
 
     # ////////////[VISUALIZATION]//////////////////////////////////////////////////////////////////////////////////////////////////
 
