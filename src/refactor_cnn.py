@@ -5,7 +5,6 @@ import math
 from typing import Callable
 from pathlib import Path
 from PIL import Image
-np.set_printoptions(suppress=True, precision=2)
 
 
 class Convolution():
@@ -150,6 +149,7 @@ class Pooling():
         self.s_p = stride
         self.mask = np.zeros((self.N, self.C_o, H, W), dtype=bool)
         self.Y_p =  np.zeros((self.N, self.C_o, self.H_p, self.W_p))
+        self.Y_d = np.zeros((self.N, self.C_o, H, W))
 
     def forward_max_pooling(self, data):
         N, C_o, H_p, W_p = self.N, self.C_o, self.H_p, self.W_p
@@ -186,10 +186,35 @@ class Pooling():
         print("Mask Shape: ", self.mask.shape)
         return self.Y_p
 
+    def backwards_max_pooling(self, head_input):
+        N, C_o, H, W = self.N, self.C_o, self.H_p, self.W_p
+        s = self.s_p
+        h_o, w_o = H//s, W//s
+
+        for n in range(N):
+            for c in range(C_o):
+                for i in range(h_o):
+                    for j in range(w_o):
+                        r, co = i*s, j*s # Gets the input position respective to the output position
+                        mask_m = self.mask[n, c, r:r+s, co:co+s] # Full size
+                        #print(f"dx: {dx[n, c, r:r+d, co:co+d].shape}")
+                        #print(f"do: {d_out[n,c,i,j].shape}")
+                        #print(f"ma: {mask_m}")
+                        # Keeps only activated position from the original input
+                        # Takes the selected mask position and transfer it to upscaled matrices
+                        self.Y_d[n, c, r:r+s, co:co+s] += head_input[n,c,i,j] * mask_m
+                        # print("EVAL FRAME: ", mask_m / mask_m.sum())
+        print("Shape Pool Back: ", self.Y_d.shape)
+        print("Pool Back:\n", self.Y_d)
+        return self.Y_d
+
+
+
 
 class Head():
     def __init__(self, data, evaluation, learning_rate=0.1, bias=0.1):
         self.input = data
+        self.input_d = np.zeros((data.shape))
         self.N, self.C_o, self.H, self.W = data.shape
         self.Y = evaluation
         self.K = len(evaluation) # Number of classes for evaluation
@@ -211,7 +236,7 @@ class Head():
         self.P = np.zeros((self.N, self.K))
 
         # What the model predicts in correct
-        self.prediction = np.zeros((self.N, self.K))
+        self.prediction = np.zeros((self.N, self.K), dtype=bool)
 
         # Cross-Entropy Loss
         self.L:float
@@ -232,13 +257,13 @@ class Head():
             for k in range(self.K)]
             for n in range(self.N)])[:]
         print("Soft Shape: ", self.P.shape)
-        print("Classification:\n", self.P)
+        print("\nClassification:\n", self.P)
         print("Evaluation:\n", self.Y)
         self.forward_prediction()
 
     def forward_prediction(self):
-        self.prediction[:] = (self.P * self.Y)[:]
-        print("Prediction:\n", self.prediction)
+        self.prediction[:] = (self.P.argmax(axis=1) == self.Y.argmax(axis=1))[:, None]
+        print("Correct Predictions:\n", self.prediction, "\n")
 
     def forward_loss(self):
         self.L = -np.mean(np.sum(self.Y * (np.log(self.P)+1e-12), axis=1))
@@ -249,14 +274,34 @@ class Head():
     def backward_loss_softmax(self):
         self.Z_d[:] = ((1/self.N) * (self.P - self.Y))[:]
         print("Shape: ", self.Z_d.shape)
-        self.forward_prediction()
         print("Loss Derivative w.r.t Logits:\n", self.Z_d, "\n")
 
     def backward_loss_weights(self):
-        self.U_d = self.Z_d.T @ self.B
+        self.U_d[:] = (self.Z_d.T @ self.G)[:]
         print("Shape: ", self.U_d.shape)
-        self.forward_prediction()
         print("Loss Derivative w.r.t Weights:\n", self.U_d, "\n")
+        print("Old Weights:\n", self.U, "\n")
+        #self.U = self.U_d * self.lr # Updates weights
+
+    def backward_loss_bias(self):
+        self.B_d[:] = self.Z_d.sum(axis=0)[:]
+        print("Loss Derivative w.r.t Bias:\n", self.B_d, "\n")
+        print("Old Bias:\n", self.B, "\n")
+        #self.B = self.B_d * self.lr
+
+    def backward_loss_gap(self):
+        self.G_d[:] = (self.Z_d @ self.U)[:]
+        print("Loss Derivative w.r.t GAP:\n", self.G_d, "\n")
+        print("Old GAP:\n", self.G, "\n")
+
+    def backward_update_head(self):
+        self.U -= self.lr * self.U_d
+        self.B -= self.lr * self.B_d
+
+    # Preps data structure to exit head and continue to push into layers back-propagation
+    def backward_loss_exit(self):
+        self.input_d[:] = self.G_d[:, :, None, None] / (self.H * self.W)
+        print("Loss Derivative Shape w.r.t Head Input:\n", self.input_d.shape, "\n")
 
 
 # Prints out a copy of the original input image and one feature map along the convolution process
@@ -275,7 +320,7 @@ def graph_output(data, raw, layers=1, forward_render=False):
                 #print(f'PLACEMENT: ({r+(n*2)}, {c+1}) ' )
                 axes[r+(n*2),c+1].imshow(data[n][c][r][fm_n], cmap='gray') # Maps kernel outputs to successive rows
                 axes[r+(n*2),c+1].axis('off')
-    #plt.show()
+    plt.show()
 
 
 def clock(marker:str):
@@ -286,6 +331,7 @@ def clock(marker:str):
 
 if __name__ == "__main__":
     rng = np.random.default_rng()
+    #np.set_printoptions(suppress=True, precision=2)
 
     # Data extracting for directories to train CNN
     test_directory = Path("../data/test_data_256x256")
@@ -430,9 +476,17 @@ if __name__ == "__main__":
     head.forward_loss()
     clock("Head Time")
 
-    print("[BACK-PROP]")
+    print("[BACK-PROP HEAD]")
     head.backward_loss_softmax()
     head.backward_loss_weights()
+    head.backward_loss_bias()
+    head.backward_loss_gap()
+    head.backward_update_head()
+    head.backward_loss_exit()
+
+    print("[BACK-PROP LAYERS]")
+    pl_b_2 = pl_2.backwards_max_pooling(head.input_d)
+
     print("Total Time: ", time.perf_counter() - begin_time, "\n")
 
 
@@ -441,6 +495,7 @@ if __name__ == "__main__":
 
     to_graph = [[cl_f_0, al_f_0, pl_f_0],
                 [cl_f_1, al_f_1, pl_f_1],
-                [cl_f_2, al_f_2, pl_f_2]
+                [cl_f_2, al_f_2, pl_f_2],
+                [pl_b_2, pl_b_2, pl_b_2]
     ]
     graph_output(data=to_graph, raw=data_raw, layers=1)
