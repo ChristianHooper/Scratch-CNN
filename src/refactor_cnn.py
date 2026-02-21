@@ -106,7 +106,7 @@ class Convolution():
                     filter_matrices[v,u] = self.test_filter()
             return filter_matrices
 
-    # Create an identify matrix for matrix multiplication
+    # Creates an identify matrix for matrix derivative operation for edge detection
     def test_filter(self, order=2):
         matrix_space = np.zeros((self.fl, self.fl))
         pattern = {0:(0,0), 1:(-1,1), 2:(1,-2,1)}
@@ -122,6 +122,9 @@ class Convolution():
                 if index >= len(row): index = (index-len(row)) * -1 # Error correction bottom matrices
                 row[index] = pattern[order][n] # Sets each indices
         return matrix_space
+
+    def backward_convolution(self, data):
+        return data
 
 
 class Activation():
@@ -140,6 +143,10 @@ class Activation():
         self.Y_a[:] = self.f_forward(data)[:]
         print("Activation Shape: ", self.Y_a.shape)
         return self.Y_a
+
+
+    def backwards_activation(self, data): # TODO: Create back-propagation function
+        return data
 
 
 class Pooling():
@@ -186,10 +193,15 @@ class Pooling():
         print("Mask Shape: ", self.mask.shape)
         return self.Y_p
 
-    def backwards_max_pooling(self, head_input):
+    def backwards_max_pooling(self, data):
         N, C_o, H, W = self.N, self.C_o, self.H_p, self.W_p
         s = self.s_p
         h_o, w_o = H//s, W//s
+
+        print("Mask: ", self.mask.shape)
+        print("Data: ", data.shape)
+        print("Output:", self.Y_d.shape)
+        print(f"h_o, w_o: {h_o}, {w_o}")
 
         for n in range(N):
             for c in range(C_o):
@@ -197,18 +209,13 @@ class Pooling():
                     for j in range(w_o):
                         r, co = i*s, j*s # Gets the input position respective to the output position
                         mask_m = self.mask[n, c, r:r+s, co:co+s] # Full size
-                        #print(f"dx: {dx[n, c, r:r+d, co:co+d].shape}")
-                        #print(f"do: {d_out[n,c,i,j].shape}")
-                        #print(f"ma: {mask_m}")
+
                         # Keeps only activated position from the original input
                         # Takes the selected mask position and transfer it to upscaled matrices
-                        self.Y_d[n, c, r:r+s, co:co+s] += head_input[n,c,i,j] * mask_m
+                        self.Y_d[n, c, r:r+s, co:co+s] += data[n,c,i,j] * mask_m
                         # print("EVAL FRAME: ", mask_m / mask_m.sum())
         print("Shape Pool Back: ", self.Y_d.shape)
-        print("Pool Back:\n", self.Y_d)
         return self.Y_d
-
-
 
 
 class Head():
@@ -302,6 +309,7 @@ class Head():
     def backward_loss_exit(self):
         self.input_d[:] = self.G_d[:, :, None, None] / (self.H * self.W)
         print("Loss Derivative Shape w.r.t Head Input:\n", self.input_d.shape, "\n")
+        #print("D:\n", self.input_d)
 
 
 # Prints out a copy of the original input image and one feature map along the convolution process
@@ -309,7 +317,7 @@ def graph_output(data, raw, layers=1, forward_render=False):
     f_r = 1 if forward_render == 1 else 0
     fm_n = 0
     # Graph information
-    fig, axes = plt.subplots(len(raw)*layers+f_r, len(data)+1, figsize=(15, 10), constrained_layout=True)
+    fig, axes = plt.subplots(len(raw)*layers+f_r, len(data[0])+1, figsize=(15, 10), constrained_layout=True)
     print("Graphing Shape: ", axes.shape)
     for n in range(layers):
         for r in range(len(raw)):
@@ -318,6 +326,7 @@ def graph_output(data, raw, layers=1, forward_render=False):
 
             for c in range(len(data[0])):
                 #print(f'PLACEMENT: ({r+(n*2)}, {c+1}) ' )
+                #print(f"PLACEMENT: ({r+(n*2)}, {c+1})")
                 axes[r+(n*2),c+1].imshow(data[n][c][r][fm_n], cmap='gray') # Maps kernel outputs to successive rows
                 axes[r+(n*2),c+1].axis('off')
     plt.show()
@@ -451,19 +460,19 @@ if __name__ == "__main__":
 
     # ////////////[NETWORK PROCESSING]//////////////////////////////////////////////////////////////////////////////////////////////////
 
-    print("\n[Layer 0]")
+    print("\n[Layer 0 Forward]")
     cl_f_0 = cl_0.forward_convolution() # Convolution forward pass
     al_f_0 = al_0.forward_activation(cl_f_0) # Activation function forward pass
     pl_f_0 = pl_0.forward_max_pooling(al_f_0) # Max-pooling forward pass
     clock("L0 Convolution Time")
 
-    print("\n[Layer 1]")
+    print("\n[Layer 1 Forward]")
     cl_f_1 = cl_1.forward_convolution() # Convolution forward pass
     al_f_1 = al_1.forward_activation(cl_f_1) # Activation function forward pass
     pl_f_1 = pl_1.forward_max_pooling(al_f_1) # Max-pooling forward pass
     clock("L1 Convolution Time")
 
-    print("\n[Layer 2]")
+    print("\n[Layer 2 Forward]")
     cl_f_2 = cl_2.forward_convolution() # Convolution forward pass
     al_f_2 = al_2.forward_activation(cl_f_2) # Activation function forward pass
     pl_f_2 = pl_2.forward_max_pooling(al_f_2) # Max-pooling forward pass
@@ -485,7 +494,20 @@ if __name__ == "__main__":
     head.backward_loss_exit()
 
     print("[BACK-PROP LAYERS]")
+    print("\n[Layer 2 Backwards]")
     pl_b_2 = pl_2.backwards_max_pooling(head.input_d)
+    al_b_2 = al_2.backwards_activation(pl_b_2)
+    cl_b_2 = cl_2.backward_convolution(al_b_2)
+
+    print("\n[Layer 1 Backwards]")
+    pl_b_1 = pl_1.backwards_max_pooling(cl_b_2)
+    al_b_1 = al_1.backwards_activation(pl_b_1)
+    cl_b_1 = cl_1.backward_convolution(al_b_1)
+
+    print("\n[Layer 0 Backwards]")
+    pl_b_0 = pl_0.backwards_max_pooling(cl_b_1)
+    al_b_1 = al_1.backwards_activation(pl_b_1)
+    cl_b_1 = cl_1.backward_convolution(al_b_1)
 
     print("Total Time: ", time.perf_counter() - begin_time, "\n")
 
@@ -493,9 +515,8 @@ if __name__ == "__main__":
 
     # ////////////[VISUALIZATION]//////////////////////////////////////////////////////////////////////////////////////////////////
 
-    to_graph = [[cl_f_0, al_f_0, pl_f_0],
-                [cl_f_1, al_f_1, pl_f_1],
-                [cl_f_2, al_f_2, pl_f_2],
-                [pl_b_2, pl_b_2, pl_b_2]
+    to_graph = [[cl_f_0, al_f_0, pl_f_0, pl_0.mask, pl_b_0],
+                [cl_f_1, al_f_1, pl_f_1, pl_1.mask, pl_b_1],
+                [cl_f_2, al_f_2, pl_f_2, pl_2.mask, pl_b_2],
     ]
     graph_output(data=to_graph, raw=data_raw, layers=1)
