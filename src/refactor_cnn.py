@@ -18,6 +18,7 @@ class Convolution():
         padding:int,
         bias:int,
         test:bool=False,
+        learning_rate=0.1,
         rng_obj=np.random.default_rng()
     ):
         self.layer_number = layer_number
@@ -38,9 +39,16 @@ class Convolution():
             int((self.W + (2*self.p)))
             )
         )
+        # Convolution forward structures
         self.b = np.full(self.C_o, bias)
         self.U = self.set_weights(test=self.test)
         self.Y = np.zeros((self.N, self.C_o, self.H//self.s, self.W//self.s)) # Forward output for back propagation
+
+        # Back-propagation derivative structures
+        self.lr  = learning_rate
+        self.b_d = np.zeros_like(self.b)
+        self.U_d = np.zeros_like(self.U)
+        self.Y_d = np.zeros((self.N, self.C_i, self.H, self.W))
 
         print(f'Data: {self.X.shape}')
         print(f'Data Padded: {self.X_c.shape}')
@@ -84,6 +92,51 @@ class Convolution():
         self.X_c[:] = 0 # Clears padding
         return self.Y
 
+    def backward_convolution(self, data):
+
+        # Data is the back-propagation derivative across all functions
+        # Image set size, output size, feature map height, feature map width
+        N, C_o, H, W = data.shape
+
+        # Original input size, kernel size, stride, edge padding, bias
+        C_i, fl, s, p, b = self.C_i, self.fl, self.s, self.p, self.b
+
+        # Original logits output, padding container for data
+        X, X_c = self.X, self.X_c
+        X_c[:, :, p:p+H, p:p+W] = X # Padded inputs
+
+        # Derivative structures
+        b_d = self.b_d
+        Y_d = self.Y_d
+        U_d = self.U_d
+
+        print("Bias_D shape: ", self.b_d.shape)
+        print("Y_d shape: ", self.Y_d.shape)
+        print("Data shape: ", data.shape)
+        print("Weight shape: ", self.U_d.shape)
+        print("Contain shape: ", self.X_c.shape)
+
+        for n in range(N):
+            for o in range(C_o):
+                b_d[o] += np.sum(data[n,o])
+                for h in range(H):
+                    for w in range(W):
+                        d_z = data[n, o, h, w]
+                        for i in range(C_i):
+                            patch = X_c[n, i, h:h+fl, w:w+fl]
+                            U_d[o, i] += d_z * patch
+                            X_c[n, i, h:h+fl, w:w+fl] += U_d[o,i]
+        self.b_d[:] = b_d
+        self.Y_d[:] = X_c[:,:, p:p+H, p:p+W]
+        self.U_d[:] = U_d
+
+        # Update weights and bias
+        self.U -= self.lr * self.U_d
+        self.b -= self.lr * self.b_d
+
+        return self.Y_d
+
+
     def set_weights(self, test=False) -> np.ndarray :
         """
         Creates Xavier-scaled weights for the convolution kernels.
@@ -123,20 +176,24 @@ class Convolution():
                 row[index] = pattern[order][n] # Sets each indices
         return matrix_space
 
-    def backward_convolution(self, data):
-        return data
-
 
 class Activation():
     def __init__(self, shape:tuple, function_type:str='relu'):
+        self.f_type = function_type
         self.forward_activation_functions = {
             'relu':     lambda x: np.maximum(x, 0),
             'gelu':     lambda x: 0.5 * x * (1 + np.tanh(np.sqrt(2/np.pi) * x + 0.044715 * x**3)),
             'sigmoid':  lambda x: 1 / (1 + np.exp(-x)),
             #'softmax':  lambda x: (np.exp(x[i]))/(sum(np.exp(x))) # TODO: work out i
         }
-        self.f_forward = self.forward_activation_functions[function_type]
+        self.f_forward = self.forward_activation_functions[self.f_type]
         self.Y_a = np.zeros(shape)
+        self.Y_d = np.zeros(shape)
+
+        self.backwards_activation_functions = {
+            'relu': lambda x: x * (self.Y_a > 0)
+        }
+        self.f_backward = self.backwards_activation_functions[self.f_type]
 
     # Activation function for forwards pass
     def forward_activation(self, data:np.ndarray) -> np.ndarray:
@@ -144,9 +201,10 @@ class Activation():
         print("Activation Shape: ", self.Y_a.shape)
         return self.Y_a
 
-
     def backwards_activation(self, data): # TODO: Create back-propagation function
-        return data
+        self.Y_d[:] = self.f_backward(data)[:]
+        print("Activation OR", self.Y_a.shape)
+        return self.Y_d
 
 
 class Pooling():
@@ -196,25 +254,22 @@ class Pooling():
     def backwards_max_pooling(self, data):
         N, C_o, H, W = self.N, self.C_o, self.H_p, self.W_p
         s = self.s_p
-        h_o, w_o = H//s, W//s
-
-        print("Mask: ", self.mask.shape)
-        print("Data: ", data.shape)
-        print("Output:", self.Y_d.shape)
-        print(f"h_o, w_o: {h_o}, {w_o}")
+        h_o, w_o = H, W
+        mask = self.mask
+        Y_d = self.Y_d
 
         for n in range(N):
             for c in range(C_o):
                 for i in range(h_o):
                     for j in range(w_o):
                         r, co = i*s, j*s # Gets the input position respective to the output position
-                        mask_m = self.mask[n, c, r:r+s, co:co+s] # Full size
-
+                        mask_m = mask[n, c, r:r+s, co:co+s] # Full size
                         # Keeps only activated position from the original input
                         # Takes the selected mask position and transfer it to upscaled matrices
                         self.Y_d[n, c, r:r+s, co:co+s] += data[n,c,i,j] * mask_m
-                        # print("EVAL FRAME: ", mask_m / mask_m.sum())
-        print("Shape Pool Back: ", self.Y_d.shape)
+
+        print("Pooling Shape: ", self.Y_p.shape)
+        self.Y_d[:] = Y_d[:]
         return self.Y_d
 
 
@@ -325,8 +380,6 @@ def graph_output(data, raw, layers=1, forward_render=False):
             axes[r+(n*2),0].axis('off')
 
             for c in range(len(data[0])):
-                #print(f'PLACEMENT: ({r+(n*2)}, {c+1}) ' )
-                #print(f"PLACEMENT: ({r+(n*2)}, {c+1})")
                 axes[r+(n*2),c+1].imshow(data[n][c][r][fm_n], cmap='gray') # Maps kernel outputs to successive rows
                 axes[r+(n*2),c+1].axis('off')
     plt.show()
@@ -340,7 +393,7 @@ def clock(marker:str):
 
 if __name__ == "__main__":
     rng = np.random.default_rng()
-    #np.set_printoptions(suppress=True, precision=2)
+    np.set_printoptions(suppress=True, precision=2)
 
     # Data extracting for directories to train CNN
     test_directory = Path("../data/test_data_256x256")
@@ -369,7 +422,7 @@ if __name__ == "__main__":
     output_increase = 2
     convolution_stride = 1
     padding_thickness = kernel_size//2
-    testing = True
+    testing = False
 
     # Activation function base parameters
     bias_base = 0.1
@@ -506,17 +559,21 @@ if __name__ == "__main__":
 
     print("\n[Layer 0 Backwards]")
     pl_b_0 = pl_0.backwards_max_pooling(cl_b_1)
-    al_b_1 = al_1.backwards_activation(pl_b_1)
-    cl_b_1 = cl_1.backward_convolution(al_b_1)
+    al_b_0 = al_0.backwards_activation(pl_b_0)
+    cl_b_0 = cl_0.backward_convolution(al_b_0)
 
     print("Total Time: ", time.perf_counter() - begin_time, "\n")
 
-
+    '''
+    print("Activation Back-prop Check")
+    print(f'Data In: {np.sum(pl_b_0)}')
+    print(f'Data out: {np.sum(al_b_0)}')
+    '''
 
     # ////////////[VISUALIZATION]//////////////////////////////////////////////////////////////////////////////////////////////////
 
-    to_graph = [[cl_f_0, al_f_0, pl_f_0, pl_0.mask, pl_b_0],
-                [cl_f_1, al_f_1, pl_f_1, pl_1.mask, pl_b_1],
-                [cl_f_2, al_f_2, pl_f_2, pl_2.mask, pl_b_2],
+    to_graph = [[cl_f_0, al_f_0, pl_f_0, pl_0.mask, pl_b_0, al_b_0],
+                [cl_f_1, al_f_1, pl_f_1, pl_1.mask, pl_b_1, al_b_1],
+                [cl_f_2, al_f_2, pl_f_2, pl_2.mask, pl_b_2, al_b_2],
     ]
     graph_output(data=to_graph, raw=data_raw, layers=1)
