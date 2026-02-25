@@ -430,7 +430,7 @@ if __name__ == "__main__":
     output_increase = 2
     convolution_stride = 1
     padding_thickness = kernel_size//2
-    testing = True
+    testing = False
 
     # Activation function base parameters
     bias_base = 0.1
@@ -441,6 +441,7 @@ if __name__ == "__main__":
 
     loop:int = 0
     loop_end:int = 4
+    learning_rate = 0.2
 
     begin_time = time.perf_counter()
     past_time  = time.perf_counter()
@@ -458,6 +459,7 @@ if __name__ == "__main__":
         padding = padding_thickness,
         bias = bias_base,
         test = testing,
+        learning_rate = learning_rate,
         rng_obj=rng)
 
     # Creates layer 0 activation function class
@@ -483,6 +485,7 @@ if __name__ == "__main__":
         padding = padding_thickness,
         bias = bias_base,
         test = testing,
+        learning_rate = learning_rate,
         rng_obj=rng)
 
     # Creates layer 1 activation function class
@@ -508,6 +511,7 @@ if __name__ == "__main__":
         padding = padding_thickness,
         bias = bias_base,
         test = testing,
+        learning_rate = learning_rate,
         rng_obj=rng )
 
     # Creates layer 2 activation function class
@@ -520,7 +524,7 @@ if __name__ == "__main__":
         stride=pooling_stride,
         input_dimensions=al_2.Y_a.shape )
 
-    head = Head(pl_2.Y_p, evaluation) # Creates class for processing head layer
+    head = Head(pl_2.Y_p, evaluation, learning_rate=learning_rate) # Creates class for processing head layer
 
     # ////////////[NETWORK PROCESSING]//////////////////////////////////////////////////////////////////////////////////////////////////
 
