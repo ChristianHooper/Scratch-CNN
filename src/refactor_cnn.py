@@ -6,7 +6,6 @@ from typing import Callable
 from pathlib import Path
 from PIL import Image
 
-
 class Convolution():
     def __init__(self,
         layer_number:int,
@@ -92,50 +91,42 @@ class Convolution():
         self.X_c[:] = 0 # Clears padding
         return self.Y
 
-    def backward_convolution(self, data):
 
-        # Data is the back-propagation derivative across all functions
-        # Image set size, output size, feature map height, feature map width
-        N, C_o, H, W = data.shape
+    def backward_convolution(self, dY):
+        # dY shape: (N, C_o, H_out, W_out)  where H_out = (H+2p-fl)//s + 1
+        N, C_o, H_out, W_out = dY.shape
+        C_i, fl, s, p = self.C_i, self.fl, self.s, self.p
 
-        # Original input size, kernel size, stride, edge padding, bias
-        C_i, fl, s, p, b = self.C_i, self.fl, self.s, self.p, self.b
+        # rebuild padded input
+        self.X_c.fill(0.0)
+        self.X_c[:, :, p:p+self.H, p:p+self.W] = self.X
 
-        # Original logits output, padding container for data
-        X, X_c = self.X, self.X_c
-        X_c[:, :, p:p+H, p:p+W] = X # Padded inputs
+        # zero grads
+        self.U_d.fill(0.0)
+        self.b_d.fill(0.0)
 
-        # Derivative structures
-        b_d = self.b_d
-        Y_d = self.Y_d
-        U_d = self.U_d
-
-        print("Bias_D shape: ", self.b_d.shape)
-        print("Y_d shape: ", self.Y_d.shape)
-        print("Data shape: ", data.shape)
-        print("Weight shape: ", self.U_d.shape)
-        print("Contain shape: ", self.X_c.shape)
+        dX_c = np.zeros_like(self.X_c)
 
         for n in range(N):
             for o in range(C_o):
-                b_d[o] += np.sum(data[n,o])
-                for h in range(H):
-                    for w in range(W):
-                        d_z = data[n, o, h, w]
+                self.b_d[o] += dY[n, o].sum()
+                for y in range(H_out):
+                    for x in range(W_out):
+                        g = dY[n, o, y, x]
+                        ys, xs = y*s, x*s
                         for i in range(C_i):
-                            patch = X_c[n, i, h:h+fl, w:w+fl]
-                            U_d[o, i] += d_z * patch
-                            X_c[n, i, h:h+fl, w:w+fl] += U_d[o,i]
-        self.b_d[:] = b_d
-        self.Y_d[:] = X_c[:,:, p:p+H, p:p+W]
-        self.U_d[:] = U_d
+                            patch = self.X_c[n, i, ys:ys+fl, xs:xs+fl]
+                            self.U_d[o, i] += g * patch
+                            dX_c[n, i, ys:ys+fl, xs:xs+fl] += g * self.U[o, i]
 
-        # Update weights and bias
+        # unpad to input gradient shape (N, C_i, H, W)
+        self.Y_d[:] = dX_c[:, :, p:p+self.H, p:p+self.W]
+
+        # update
         self.U -= self.lr * self.U_d
         self.b -= self.lr * self.b_d
 
         return self.Y_d
-
 
     def set_weights(self, test=False) -> np.ndarray :
         """
@@ -212,11 +203,13 @@ class Pooling():
         self.N, self.C_o, H, W = input_dimensions
         self.H_p, self.W_p = (((H-stride)//stride)+1, ((W-stride)//stride)+1)
         self.s_p = stride
-        self.mask = np.zeros((self.N, self.C_o, H, W), dtype=bool)
+        self.mask = np.zeros((self.N, self.C_o, H, W), dtype=int)
         self.Y_p =  np.zeros((self.N, self.C_o, self.H_p, self.W_p))
         self.Y_d = np.zeros((self.N, self.C_o, H, W))
 
     def forward_max_pooling(self, data):
+        self.mask.fill(0)
+        self.Y_p.fill(0.0)
         N, C_o, H_p, W_p = self.N, self.C_o, self.H_p, self.W_p
         s_p = self.s_p
         Y_p, mask = self.Y_p, self.mask
@@ -243,7 +236,7 @@ class Pooling():
                         Y_p[i, j, y, v] = window[m_i[0], m_i[1]]
 
                         # Mask placement for back-propagation
-                        mask[i, j, y*s_p+m_i[0], v*s_p+m_i[1]] = True
+                        mask[i, j, y*s_p+m_i[0], v*s_p+m_i[1]] = 1
 
         self.mask[:] = mask[:]
         self.Y_p[:]  = Y_p[:]
@@ -252,6 +245,7 @@ class Pooling():
         return self.Y_p
 
     def backwards_max_pooling(self, data):
+        self.Y_d.fill(0.0)
         N, C_o, H, W = self.N, self.C_o, self.H_p, self.W_p
         s = self.s_p
         h_o, w_o = H, W
@@ -339,6 +333,7 @@ class Head():
         print("Loss Derivative w.r.t Logits:\n", self.Z_d, "\n")
 
     def backward_loss_weights(self):
+        self.U_d.fill(0.0)
         self.U_d[:] = (self.Z_d.T @ self.G)[:]
         print("Shape: ", self.U_d.shape)
         print("Loss Derivative w.r.t Weights:\n", self.U_d, "\n")
@@ -346,6 +341,7 @@ class Head():
         #self.U = self.U_d * self.lr # Updates weights
 
     def backward_loss_bias(self):
+        self.B_d.fill(0.0)
         self.B_d[:] = self.Z_d.sum(axis=0)[:]
         print("Loss Derivative w.r.t Bias:\n", self.B_d, "\n")
         print("Old Bias:\n", self.B, "\n")
@@ -368,7 +364,7 @@ class Head():
 
 
 # Prints out a copy of the original input image and one feature map along the convolution process
-def graph_output(data, raw, layers=1, forward_render=False):
+def graph_output(data, raw, names, layers=1, forward_render=False):
     f_r = 1 if forward_render == 1 else 0
     fm_n = 0
     # Graph information
@@ -376,12 +372,24 @@ def graph_output(data, raw, layers=1, forward_render=False):
     print("Graphing Shape: ", axes.shape)
     for n in range(layers):
         for r in range(len(raw)):
-            axes[r+(n*2),0].imshow(raw[r,0], cmap='gray') # Maps original dataset to first row
-            axes[r+(n*2),0].axis('off')
+            if n == 0: # Maps original dataset to first row first column
+                axes[r+(n*2),0].imshow(raw[r,0], cmap='gray')
+                axes[r+(n*2),0].axis('off')
+            else:
+                blank = np.ones_like(raw[r,0])
+                axes[r+(n*2),0].imshow(blank, cmap='gray')
+                axes[r+(n*2),0].axis('off')
 
             for c in range(len(data[0])):
-                axes[r+(n*2),c+1].imshow(data[n][c][r][fm_n], cmap='gray') # Maps kernel outputs to successive rows
+                # NOrmalization of feature maps
+                feature = data[n][c][r][fm_n]
+                mn, mx = feature.min(), feature.max()
+                feature = (feature - mn) / (mx - mn + 1e-8)
+
+                # Maps kernel outputs to successive rows
+                axes[r+(n*2),c+1].imshow(feature, cmap='gray')
                 axes[r+(n*2),c+1].axis('off')
+                if n == 0 == r: axes[r+(n*2),c+1].set_title(names[c])
     plt.show()
 
 
@@ -422,7 +430,7 @@ if __name__ == "__main__":
     output_increase = 2
     convolution_stride = 1
     padding_thickness = kernel_size//2
-    testing = False
+    testing = True
 
     # Activation function base parameters
     bias_base = 0.1
@@ -430,6 +438,9 @@ if __name__ == "__main__":
 
     # Polling base parameters
     pooling_stride = 2
+
+    loop:int = 0
+    loop_end:int = 4
 
     begin_time = time.perf_counter()
     past_time  = time.perf_counter()
@@ -513,67 +524,83 @@ if __name__ == "__main__":
 
     # ////////////[NETWORK PROCESSING]//////////////////////////////////////////////////////////////////////////////////////////////////
 
-    print("\n[Layer 0 Forward]")
-    cl_f_0 = cl_0.forward_convolution() # Convolution forward pass
-    al_f_0 = al_0.forward_activation(cl_f_0) # Activation function forward pass
-    pl_f_0 = pl_0.forward_max_pooling(al_f_0) # Max-pooling forward pass
-    clock("L0 Convolution Time")
+    while loop < loop_end:
+        print("\n[Layer 0 Forward]")
+        cl_f_0 = cl_0.forward_convolution() # Convolution forward pass
+        al_f_0 = al_0.forward_activation(cl_f_0) # Activation function forward pass
+        pl_f_0 = pl_0.forward_max_pooling(al_f_0) # Max-pooling forward pass
+        clock("L0 Convolution Time")
 
-    print("\n[Layer 1 Forward]")
-    cl_f_1 = cl_1.forward_convolution() # Convolution forward pass
-    al_f_1 = al_1.forward_activation(cl_f_1) # Activation function forward pass
-    pl_f_1 = pl_1.forward_max_pooling(al_f_1) # Max-pooling forward pass
-    clock("L1 Convolution Time")
+        print("\n[Layer 1 Forward]")
+        cl_1.X[:] = pl_f_0[:]
+        cl_f_1 = cl_1.forward_convolution() # Convolution forward pass
+        al_f_1 = al_1.forward_activation(cl_f_1) # Activation function forward pass
+        pl_f_1 = pl_1.forward_max_pooling(al_f_1) # Max-pooling forward pass
+        clock("L1 Convolution Time")
 
-    print("\n[Layer 2 Forward]")
-    cl_f_2 = cl_2.forward_convolution() # Convolution forward pass
-    al_f_2 = al_2.forward_activation(cl_f_2) # Activation function forward pass
-    pl_f_2 = pl_2.forward_max_pooling(al_f_2) # Max-pooling forward pass
-    clock("L2 Convolution Time")
+        print("\n[Layer 2 Forward]")
+        cl_2.X[:] = pl_f_1[:]
+        cl_f_2 = cl_2.forward_convolution() # Convolution forward pass
+        al_f_2 = al_2.forward_activation(cl_f_2) # Activation function forward pass
+        pl_f_2 = pl_2.forward_max_pooling(al_f_2) # Max-pooling forward pass
+        clock("L2 Convolution Time")
 
-    print("[HEAD]")
-    head.forward_gap()
-    head.forward_logits()
-    head.forward_softmax()
-    head.forward_loss()
-    clock("Head Time")
+        print("[HEAD]")
+        head.input[:] = pl_f_2[:]
+        head.forward_gap()
+        head.forward_logits()
+        head.forward_softmax()
+        head.forward_loss()
+        clock("Head Time")
 
-    print("[BACK-PROP HEAD]")
-    head.backward_loss_softmax()
-    head.backward_loss_weights()
-    head.backward_loss_bias()
-    head.backward_loss_gap()
-    head.backward_update_head()
-    head.backward_loss_exit()
+        print("[BACK-PROP HEAD]")
+        head.backward_loss_softmax()
+        head.backward_loss_weights()
+        head.backward_loss_bias()
+        head.backward_loss_gap()
+        head.backward_update_head()
+        head.backward_loss_exit()
 
-    print("[BACK-PROP LAYERS]")
-    print("\n[Layer 2 Backwards]")
-    pl_b_2 = pl_2.backwards_max_pooling(head.input_d)
-    al_b_2 = al_2.backwards_activation(pl_b_2)
-    cl_b_2 = cl_2.backward_convolution(al_b_2)
+        print("[BACK-PROP LAYERS]")
+        print("\n[Layer 2 Backwards]")
+        pl_b_2 = pl_2.backwards_max_pooling(head.input_d)
+        al_b_2 = al_2.backwards_activation(pl_b_2)
+        cl_b_2 = cl_2.backward_convolution(al_b_2)
 
-    print("\n[Layer 1 Backwards]")
-    pl_b_1 = pl_1.backwards_max_pooling(cl_b_2)
-    al_b_1 = al_1.backwards_activation(pl_b_1)
-    cl_b_1 = cl_1.backward_convolution(al_b_1)
+        print("\n[Layer 1 Backwards]")
+        pl_b_1 = pl_1.backwards_max_pooling(cl_b_2)
+        al_b_1 = al_1.backwards_activation(pl_b_1)
+        cl_b_1 = cl_1.backward_convolution(al_b_1)
 
-    print("\n[Layer 0 Backwards]")
-    pl_b_0 = pl_0.backwards_max_pooling(cl_b_1)
-    al_b_0 = al_0.backwards_activation(pl_b_0)
-    cl_b_0 = cl_0.backward_convolution(al_b_0)
+        print("\n[Layer 0 Backwards]")
+        pl_b_0 = pl_0.backwards_max_pooling(cl_b_1)
+        al_b_0 = al_0.backwards_activation(pl_b_0)
+        cl_b_0 = cl_0.backward_convolution(al_b_0)
 
-    print("Total Time: ", time.perf_counter() - begin_time, "\n")
+        # Ends training epoch
+        loop += 1
+        print("Total Time: ", time.perf_counter() - begin_time, "\n")
 
-    '''
-    print("Activation Back-prop Check")
-    print(f'Data In: {np.sum(pl_b_0)}')
-    print(f'Data out: {np.sum(al_b_0)}')
-    '''
+        '''
+        print("Activation Back-prop Check")
+        print(f'Data In: {np.sum(pl_b_0)}')
+        print(f'Data out: {np.sum(al_b_0)}')
+        '''
 
-    # ////////////[VISUALIZATION]//////////////////////////////////////////////////////////////////////////////////////////////////
+        # ////////////[VISUALIZATION]//////////////////////////////////////////////////////////////////////////////////////////////////
 
-    to_graph = [[cl_f_0, al_f_0, pl_f_0, pl_0.mask, pl_b_0, al_b_0],
-                [cl_f_1, al_f_1, pl_f_1, pl_1.mask, pl_b_1, al_b_1],
-                [cl_f_2, al_f_2, pl_f_2, pl_2.mask, pl_b_2, al_b_2],
-    ]
-    graph_output(data=to_graph, raw=data_raw, layers=1)
+        to_graph = [[cl_f_0, al_f_0, pl_f_0, pl_0.mask, pl_b_0, al_b_0, cl_b_0],
+                    [cl_f_1, al_f_1, pl_f_1, pl_1.mask, pl_b_1, al_b_1, cl_b_1],
+                    [cl_f_2, al_f_2, pl_f_2, pl_2.mask, pl_b_2, al_b_2, cl_b_2],
+        ]
+
+        col_titles = [ "F-Convolution",
+                        "F-Activation",
+                        "F-MaxPooling",
+                        "F-MaskPooling",
+                        "B-MaxPooling",
+                        "B-Activation",
+                        "B-Convolution"
+        ]
+
+        graph_output(data=to_graph, raw=data_raw, names=col_titles, layers=3)
