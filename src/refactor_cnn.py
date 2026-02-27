@@ -273,7 +273,7 @@ class Head():
         self.input_d = np.zeros((data.shape))
         self.N, self.C_o, self.H, self.W = data.shape
         self.Y = evaluation
-        self.K = len(evaluation) # Number of classes for evaluation
+        self.K = self.Y.shape[1] # Number of classes for evaluation
         self.lr = learning_rate # Learning rate
 
         # Global Average Pooling (GAP)
@@ -317,7 +317,7 @@ class Head():
         print("Evaluation:\n", self.Y)
         self.forward_prediction()
 
-    def forward_prediction(self):
+    def forward_prediction(self): # TODO Likely issue
         self.prediction[:] = (self.P.argmax(axis=1) == self.Y.argmax(axis=1))[:, None]
         print("Correct Predictions:\n", self.prediction, "\n")
 
@@ -367,22 +367,25 @@ class Head():
 def graph_output(data, raw, names, layers=1, forward_render=False):
     f_r = 1 if forward_render == 1 else 0
     fm_n = 0
+    s_f = np.array([0,6]) # Sampled features
     # Graph information
-    fig, axes = plt.subplots(len(raw)*layers+f_r, len(data[0])+1, figsize=(15, 10), constrained_layout=True)
+    #fig, axes = plt.subplots(len(raw)*layers+f_r, len(data[0])+1, figsize=(15, 10), constrained_layout=True)
+    fig, axes = plt.subplots(len(s_f)*layers+f_r, len(data[0])+1, figsize=(15, 10), constrained_layout=True)
     print("Graphing Shape: ", axes.shape)
     for n in range(layers):
-        for r in range(len(raw)):
+        for r in range(len(s_f)):
+            #if 0 == r == 6: # Only show the first and six training images
             if n == 0: # Maps original dataset to first row first column
-                axes[r+(n*2),0].imshow(raw[r,0], cmap='gray')
+                axes[r+(n*2),0].imshow(raw[s_f[r],0], cmap='gray')
                 axes[r+(n*2),0].axis('off')
             else:
-                blank = np.ones_like(raw[r,0])
+                blank = np.ones_like(raw[s_f[r],0])
                 axes[r+(n*2),0].imshow(blank, cmap='gray')
                 axes[r+(n*2),0].axis('off')
 
             for c in range(len(data[0])):
-                # NOrmalization of feature maps
-                feature = data[n][c][r][fm_n]
+                # Normalization of feature maps
+                feature = data[n][c][s_f[r]][fm_n]
                 mn, mx = feature.min(), feature.max()
                 feature = (feature - mn) / (mx - mn + 1e-8)
 
@@ -409,16 +412,17 @@ if __name__ == "__main__":
 
     test_paths = sorted(test_directory.glob("*.png"))
     test_target_paths = sorted(test_target_directory.glob("*.png"))
-    total_paths = [test_paths[0], test_target_paths[0]] # TODO: Change TO: test_paths + test_target_paths
+    total_paths = test_paths + test_target_paths# TODO: [test_paths[0], test_target_paths[0]]
 
     # Class information extracted from data
-    k_0, k_1 = 1, 1 # TODO: Change TO: len(test_paths), len(test_target_paths) Images in class 0
+    k_0, k_1 = len(test_paths), len(test_target_paths) # TODO: 1, 1
     K = np.array([k_0, k_1]) # All class lengths
 
     # One-hot data evaluation metric
-    evaluation = np.zeros((len(K), sum(K)))
-    evaluation[0, 0:k_0] = 1 # Class 0 one-hot
-    evaluation[1, k_0:] = 1  # Class 1 one-hot
+    N_c, K_c = sum(K), len(K)
+    evaluation = np.zeros((N_c, K_c))
+    evaluation[0:k_0, 0] = 1 # Class 0 one-hot
+    evaluation[k_0:, 1] = 1  # Class 1 one-hot
 
     data_raw = np.array([[np.array(Image.open(p).convert("L"), dtype=np.float32) / 255] for p in total_paths])
 
@@ -440,7 +444,7 @@ if __name__ == "__main__":
     pooling_stride = 2
 
     loop:int = 0
-    loop_end:int = 4
+    loop_end:int = 10
     learning_rate = 0.2
 
     begin_time = time.perf_counter()
@@ -584,12 +588,6 @@ if __name__ == "__main__":
         # Ends training epoch
         loop += 1
         print("Total Time: ", time.perf_counter() - begin_time, "\n")
-
-        '''
-        print("Activation Back-prop Check")
-        print(f'Data In: {np.sum(pl_b_0)}')
-        print(f'Data out: {np.sum(al_b_0)}')
-        '''
 
         # ////////////[VISUALIZATION]//////////////////////////////////////////////////////////////////////////////////////////////////
 
