@@ -64,7 +64,7 @@ class Convolution():
         # Places inputs into padded container
         self.X_c[:, :, p:p+H, p:p+W] = self.X # Padded inputs
         U = self.U # Weights
-        output = np.zeros((N, C_o, H//s, W//s))
+        output = np.zeros((N, C_o, H_o, W_o))
 
         for i, X in enumerate(self.X_c): # Extracts all feature maps for a single image set
             for o in range(C_o):
@@ -105,6 +105,9 @@ class Convolution():
         self.U_d.fill(0.0)
         self.b_d.fill(0.0)
 
+        # Take scale of feature map into consideration for learning
+        scale= 1 / (N * H_out * W_out)
+
         dX_c = np.zeros_like(self.X_c)
 
         for n in range(N):
@@ -123,8 +126,8 @@ class Convolution():
         self.Y_d[:] = dX_c[:, :, p:p+self.H, p:p+self.W]
 
         # update
-        self.U -= self.lr * self.U_d
-        self.b -= self.lr * self.b_d
+        self.U -= self.lr * self.U_d #* scale
+        self.b -= self.lr * self.b_d * scale
 
         return self.Y_d
 
@@ -292,7 +295,7 @@ class Head():
         self.P = np.zeros((self.N, self.K))
 
         # What the model predicts in correct
-        self.prediction = np.zeros((self.N, self.K), dtype=bool)
+        self.prediction = np.zeros((self.N))
 
         # Cross-Entropy Loss
         self.L:float
@@ -318,17 +321,18 @@ class Head():
         self.forward_prediction()
 
     def forward_prediction(self): # TODO Likely issue
-        self.prediction[:] = (self.P.argmax(axis=1) == self.Y.argmax(axis=1))[:, None]
-        print("Correct Predictions:\n", self.prediction, "\n")
+
+        self.prediction[:] = (self.P.argmax(axis=1) == self.Y.argmax(axis=1)) # (N,)
+        print("Acc:", self.prediction.mean())
 
     def forward_loss(self):
-        self.L = -np.mean(np.sum(self.Y * (np.log(self.P)+1e-12), axis=1))
+        self.L = -np.mean(np.sum(self.Y * np.log(self.P + 1e-12), axis=1))
         print("Loss: ", self.L)
 
     # Start of the back-propagation functions below: $\frac{dx}{dy}f(h(g(x)))=f'(h(g(x))*h(g(x)*g'(x)$
     # Calculates the derivative of the loss w.r.t logit scores
     def backward_loss_softmax(self):
-        self.Z_d[:] = ((1/self.N) * (self.P - self.Y))[:]
+        self.Z_d[:] = (self.P - self.Y) / self.N  # ((1/self.N) * (self.P - self.Y))[:]
         print("Shape: ", self.Z_d.shape)
         print("Loss Derivative w.r.t Logits:\n", self.Z_d, "\n")
 
@@ -402,6 +406,9 @@ def clock(marker:str):
     past_time = time.perf_counter()
 
 
+def stats(name, W, dW):
+    print(f"{name}: |W|={np.linalg.norm(W):.3e}  |dW|={np.linalg.norm(dW):.3e}  max|dW|={np.max(np.abs(dW)):.3e}")
+
 if __name__ == "__main__":
     rng = np.random.default_rng()
     np.set_printoptions(suppress=True, precision=2)
@@ -412,10 +419,10 @@ if __name__ == "__main__":
 
     test_paths = sorted(test_directory.glob("*.png"))
     test_target_paths = sorted(test_target_directory.glob("*.png"))
-    total_paths = test_paths + test_target_paths# TODO: [test_paths[0], test_target_paths[0]]
+    total_paths = test_paths + test_target_paths # TODO: [test_paths[0], test_target_paths[0]]
 
     # Class information extracted from data
-    k_0, k_1 = len(test_paths), len(test_target_paths) # TODO: 1, 1
+    k_0, k_1 = len(test_paths), len(test_target_paths) # 1, 1 # TODO:
     K = np.array([k_0, k_1]) # All class lengths
 
     # One-hot data evaluation metric
@@ -444,8 +451,9 @@ if __name__ == "__main__":
     pooling_stride = 2
 
     loop:int = 0
-    loop_end:int = 10
-    learning_rate = 0.2
+    loop_end:int = 50
+    layer_lr = 0.03
+    head_lr = 0.2
 
     begin_time = time.perf_counter()
     past_time  = time.perf_counter()
@@ -463,7 +471,7 @@ if __name__ == "__main__":
         padding = padding_thickness,
         bias = bias_base,
         test = testing,
-        learning_rate = learning_rate,
+        learning_rate = layer_lr,
         rng_obj=rng)
 
     # Creates layer 0 activation function class
@@ -489,7 +497,7 @@ if __name__ == "__main__":
         padding = padding_thickness,
         bias = bias_base,
         test = testing,
-        learning_rate = learning_rate,
+        learning_rate = layer_lr,
         rng_obj=rng)
 
     # Creates layer 1 activation function class
@@ -515,7 +523,7 @@ if __name__ == "__main__":
         padding = padding_thickness,
         bias = bias_base,
         test = testing,
-        learning_rate = learning_rate,
+        learning_rate = layer_lr,
         rng_obj=rng )
 
     # Creates layer 2 activation function class
@@ -528,7 +536,7 @@ if __name__ == "__main__":
         stride=pooling_stride,
         input_dimensions=al_2.Y_a.shape )
 
-    head = Head(pl_2.Y_p, evaluation, learning_rate=learning_rate) # Creates class for processing head layer
+    head = Head(pl_2.Y_p, evaluation, learning_rate=head_lr) # Creates class for processing head layer
 
     # ////////////[NETWORK PROCESSING]//////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -588,21 +596,34 @@ if __name__ == "__main__":
         # Ends training epoch
         loop += 1
         print("Total Time: ", time.perf_counter() - begin_time, "\n")
+        stats("head.U", head.U, head.U_d)
+        stats("conv0.U", cl_0.U, cl_0.U_d)
+        stats("conv1.U", cl_1.U, cl_1.U_d)
+        stats("conv2.U", cl_2.U, cl_2.U_d)
+        dU0 = np.linalg.norm(cl_0.lr * cl_0.U_d)
+        dU1 = np.linalg.norm(cl_1.lr * cl_1.U_d)
+        dU2 = np.linalg.norm(cl_2.lr * cl_2.U_d)
+        print("Delta-conv norms:", dU0, dU1, dU2)
+        print("Acc:  ", head.prediction.mean())
+        print("Loss: ", head.L)
+
 
         # ////////////[VISUALIZATION]//////////////////////////////////////////////////////////////////////////////////////////////////
 
-        to_graph = [[cl_f_0, al_f_0, pl_f_0, pl_0.mask, pl_b_0, al_b_0, cl_b_0],
-                    [cl_f_1, al_f_1, pl_f_1, pl_1.mask, pl_b_1, al_b_1, cl_b_1],
-                    [cl_f_2, al_f_2, pl_f_2, pl_2.mask, pl_b_2, al_b_2, cl_b_2],
-        ]
+        #if loop == 1 or loop % 5 == 0:
 
-        col_titles = [ "F-Convolution",
-                        "F-Activation",
-                        "F-MaxPooling",
-                        "F-MaskPooling",
-                        "B-MaxPooling",
-                        "B-Activation",
-                        "B-Convolution"
-        ]
+    to_graph = [[cl_f_0, al_f_0, pl_f_0, pl_0.mask, pl_b_0, al_b_0, cl_b_0],
+                [cl_f_1, al_f_1, pl_f_1, pl_1.mask, pl_b_1, al_b_1, cl_b_1],
+                [cl_f_2, al_f_2, pl_f_2, pl_2.mask, pl_b_2, al_b_2, cl_b_2],
+    ]
 
-        graph_output(data=to_graph, raw=data_raw, names=col_titles, layers=3)
+    col_titles = [ "F-Convolution",
+                    "F-Activation",
+                    "F-MaxPooling",
+                    "F-MaskPooling",
+                    "B-MaxPooling",
+                    "B-Activation",
+                    "B-Convolution"
+    ]
+
+    graph_output(data=to_graph, raw=data_raw, names=col_titles, layers=3)
